@@ -55,10 +55,29 @@ python vertex_openai_proxy.py
 | 已确认存在的模型 ID | `claude-sonnet-4-5@20250929`、`claude-opus-4-5@20251101`、`claude-haiku-4-5@20251001` |
 | 本项目不可用 | `claude-3-7-sonnet@20250219`、`claude-3-5-sonnet-v2@20241022`、`claude-3-5-haiku@20241022`（404） |
 
-> ⚠️ 2026-10-17 实测：上述三个模型**都存在但配额为 0**，调用返回
-> `429 Quota exceeded for ... online_prediction_requests_per_base_model`。
-> 需要在控制台 IAM → 配额里按 `base model = anthropic-claude-*` 申请提额，
-> 批下来才能实际返回内容。代码侧无需再改。
+### 实测记录（2026-10-17）
+
+**结论：代码侧已就绪，当前项目无法调用，卡在配额「0 到 0」锁死。**
+
+1. 三个模型都存在，但配额为 0，调用返回：
+
+   ```
+   429 Quota exceeded for aiplatform.googleapis.com/global_online_prediction_requests_per_base_model
+   with base model: anthropic-claude-sonnet-4-5.
+   Please submit a quota increase request.
+   ```
+
+2. 到控制台 `IAM 和管理 → 配额` 尝试自助提额（指标 `online_prediction_requests_per_base_model`，
+   base model `anthropic-claude-*`）时，**无法提交**：
+
+   > 请输入 0 到 0 之间的新配额值，根据您的服务使用记录目前不符合条件
+
+   即：新账号没有产生付费使用记录前，自助提额表单被锁死在 0~0。
+
+3. 与 `us-east5` 等区域无关（这些区域本身就是 404），也与服务账号权限无关（Gemini 同凭证正常）。
+
+**后续怎么恢复**：等账号积累了实际计费使用记录后再去同一页面尝试提额；一旦配额 > 0，
+`claude-*` 无需改任何代码即可使用。在此之前该分支只会返回带中文提示的 502，不影响 Gemini。
 
 可用环境变量：`CLAUDE_REGION`（默认 `global`）、`CLAUDE_PROJECT`（默认同 `GOOGLE_CLOUD_PROJECT`）。
 
