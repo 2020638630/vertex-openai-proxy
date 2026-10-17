@@ -1,0 +1,25 @@
+# ===== 密钥与本地配置（绝不入库）=====
+.env
+.env.local
+*.key
+*.pem
+*service-account*.json
+vertex-sa.json
+application_default_credentials.json
+
+# ===== 运行产物 =====
+Temp/
+logs/
+*.log
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# ===== IDE / 编辑器 =====
+.zcode/
+.vscode/
+.idea/
+
+# ===== 演示与测试产物 =====
+sandbox-demo/
+*.xlsx
