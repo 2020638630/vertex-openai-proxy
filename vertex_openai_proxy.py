@@ -129,7 +129,9 @@ def _auth_mode() -> Tuple[str, str, str, str]:
     sa_path = (os.getenv("VERTEX_SA_JSON") or "").strip()
     adc = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
 
-    has_sa = bool((sa_path and os.path.exists(sa_path)) or (adc and os.path.exists(adc)))
+    has_sa = bool(
+        (sa_path and os.path.exists(sa_path)) or (adc and os.path.exists(adc))
+    )
     if auth == "service_account":
         mode = "service_account"
     elif auth == "api_key":
@@ -151,7 +153,11 @@ def get_client() -> genai.Client:
         sa_path = (os.getenv("VERTEX_SA_JSON") or "").strip()
         if sa_path and os.path.exists(sa_path):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_path
-        sig = "sa|%s|%s|%s" % (project, location, os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+        sig = "sa|%s|%s|%s" % (
+            project,
+            location,
+            os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
+        )
     else:
         sig = "key|%s|%s|%s" % (key, project, location)
 
@@ -168,7 +174,11 @@ def get_client() -> genai.Client:
                 "服务账号模式需要 VERTEX_SA_JSON 指向密钥文件，"
                 "或设置环境变量 GOOGLE_APPLICATION_CREDENTIALS"
             )
-        kwargs: Dict[str, Any] = {"vertexai": True, "project": project, "location": location}
+        kwargs: Dict[str, Any] = {
+            "vertexai": True,
+            "project": project,
+            "location": location,
+        }
     else:
         if not key:
             raise RuntimeError(
@@ -245,7 +255,9 @@ def _part_from_block(block: Dict[str, Any]) -> Optional[types.Part]:
             )
         if url:
             # 远程 URL：Vertex 需要先取字节，这里交给 SDK 的 URI 能力
-            return types.Part(file_data=types.FileData(file_uri=url, mime_type="image/png"))
+            return types.Part(
+                file_data=types.FileData(file_uri=url, mime_type="image/png")
+            )
         return None
 
     return None
@@ -288,7 +300,7 @@ def _as_text(content: Any) -> str:
 
 
 def build_contents(
-    messages: List[Dict[str, Any]]
+    messages: List[Dict[str, Any]],
 ) -> Tuple[Optional[types.Content], List[types.Content]]:
     """返回 (system_instruction, contents)，含 tool_calls / tool 结果的双向映射"""
     system_chunks: List[str] = []
@@ -298,7 +310,7 @@ def build_contents(
     # 一轮工具调用可能包含多个并行调用（例如一次读 5 个文件）。
     # Gemini 要求这些结果【必须在同一个 turn 里，且数量与调用数一一对应】，
     # 拆成多个 user turn 会报 "number of function response parts is equal to ..."。
-    call_order: List[Tuple[str, str]] = []   # 本轮调用的 (id, name)，保持模型发起顺序
+    call_order: List[Tuple[str, str]] = []  # 本轮调用的 (id, name)，保持模型发起顺序
     call_results: Dict[str, str] = {}
     open_turn = False
 
@@ -344,7 +356,9 @@ def build_contents(
                 if tcid in dict(call_order):
                     call_results[tcid] = text
                 else:
-                    log.warning("工具结果 tool_call_id=%r 不在本轮调用列表里，已丢弃", tcid)
+                    log.warning(
+                        "工具结果 tool_call_id=%r 不在本轮调用列表里，已丢弃", tcid
+                    )
             else:
                 # 没有对应的调用轮（异常情况），单独成一轮
                 name = call_id_to_name.get(tcid) or "tool_result"
@@ -383,7 +397,9 @@ def build_contents(
                     call_parts.append(cached)
                 else:
                     call_parts.append(
-                        types.Part(function_call=types.FunctionCall(name=fname, args=fargs))
+                        types.Part(
+                            function_call=types.FunctionCall(name=fname, args=fargs)
+                        )
                     )
                 if tc.get("id"):
                     call_id_to_name[str(tc["id"])] = fname
@@ -411,7 +427,9 @@ def build_contents(
         mergeable = (
             last is not None
             and last.role == grole
-            and not any(getattr(p, "function_response", None) for p in (last.parts or []))
+            and not any(
+                getattr(p, "function_response", None) for p in (last.parts or [])
+            )
         )
         if mergeable:
             last.parts.extend(parts)  # type: ignore[union-attr]
@@ -421,7 +439,9 @@ def build_contents(
     flush_tool_turn()
 
     if contents and contents[0].role != "user":
-        contents.insert(0, types.Content(role="user", parts=[types.Part(text="Continue.")]))
+        contents.insert(
+            0, types.Content(role="user", parts=[types.Part(text="Continue.")])
+        )
 
     system = None
     system_text = "\n\n".join(c for c in system_chunks if c.strip())
@@ -528,7 +548,9 @@ def extract_tool_calls(resp: Any) -> List[Dict[str, Any]]:
                 "type": "function",
                 "function": {
                     "name": fc.name,
-                    "arguments": json.dumps(args if args is not None else {}, ensure_ascii=False),
+                    "arguments": json.dumps(
+                        args if args is not None else {}, ensure_ascii=False
+                    ),
                 },
             }
         )
@@ -539,7 +561,7 @@ def normalize_model(name: Optional[str]) -> str:
     name = (name or DEFAULT_MODEL).strip()
     for prefix in ("google/", "models/", "vertex_ai/", "vertex/"):
         if name.startswith(prefix):
-            name = name[len(prefix):]
+            name = name[len(prefix) :]
     name = name or DEFAULT_MODEL
     return MODEL_ALIASES.get(name, name)
 
@@ -622,10 +644,14 @@ def run_server_tool(client: Any, model: str, kind: str, args: Any) -> str:
             "只给结论与数据，不要寒暄，不要描述你的检索过程：\n" + need
         )
         # 搜索固定用快模型：实测 gemini-4-argon 带 grounding 要 49~170 秒，会把客户端卡死
-        use_model = (os.getenv("BRIDGE_SEARCH_MODEL") or "gemini-2.5-flash").strip() or model
+        use_model = (
+            os.getenv("BRIDGE_SEARCH_MODEL") or "gemini-2.5-flash"
+        ).strip() or model
     else:
         tools = [types.Tool(code_execution=types.ToolCodeExecution())]
-        prompt = "请用 Python 代码执行完成以下需求，并给出执行结果，不要只贴代码：\n" + need
+        prompt = (
+            "请用 Python 代码执行完成以下需求，并给出执行结果，不要只贴代码：\n" + need
+        )
         use_model = model
 
     resp = _generate(
@@ -666,7 +692,7 @@ def _retryable(exc: BaseException) -> bool:
 
 
 def _backoff(attempt: int, base: float, cap: float) -> float:
-    delay = min(cap, base * (2 ** attempt))
+    delay = min(cap, base * (2**attempt))
     return delay + random.uniform(0, 1)
 
 
@@ -682,13 +708,20 @@ def _generate(client: Any, model: str, contents: Any, config: Any) -> Any:
             if not _retryable(exc) or i >= attempts - 1:
                 raise
             wait = _backoff(i, base, cap)
-            log.warning("上游限流/故障，%.0f 秒后重试（%d/%d）: %s",
-                        wait, i + 1, attempts, str(exc)[:80])
+            log.warning(
+                "上游限流/故障，%.0f 秒后重试（%d/%d）: %s",
+                wait,
+                i + 1,
+                attempts,
+                str(exc)[:80],
+            )
             time.sleep(wait)
     raise RuntimeError("unreachable")
 
 
-def _open_stream(client: Any, model: str, contents: Any, config: Any) -> Tuple[Any, Any]:
+def _open_stream(
+    client: Any, model: str, contents: Any, config: Any
+) -> Tuple[Any, Any]:
     """建立上游流并预取首帧：限流在这里重试，硬错误在响应头之前抛出。"""
     attempts, base, cap = _retry_cfg()
     for i in range(attempts):
@@ -702,8 +735,13 @@ def _open_stream(client: Any, model: str, contents: Any, config: Any) -> Tuple[A
             if not _retryable(exc) or i >= attempts - 1:
                 raise
             wait = _backoff(i, base, cap)
-            log.warning("上游限流/故障，%.0f 秒后重试（%d/%d）: %s",
-                        wait, i + 1, attempts, str(exc)[:80])
+            log.warning(
+                "上游限流/故障，%.0f 秒后重试（%d/%d）: %s",
+                wait,
+                i + 1,
+                attempts,
+                str(exc)[:80],
+            )
             time.sleep(wait)
     raise RuntimeError("unreachable")
 
@@ -798,9 +836,9 @@ def _upstream_msg(exc: Exception, model: str) -> str:
     text = "%s: %s" % (type(exc).__name__, exc)
     s = str(exc)
     if "NOT_FOUND" in s or "was not found" in s:
-        text += (
-            " | 提示：project/location 下找不到模型 %s，当前环境可用模型为 %s"
-            % (model, ", ".join(MODELS))
+        text += " | 提示：project/location 下找不到模型 %s，当前环境可用模型为 %s" % (
+            model,
+            ", ".join(MODELS),
         )
     elif "UNAUTHENTICATED" in s or "API key not valid" in s or " 401 " in s:
         text += " | 提示：GEMINI_API_KEY 无效或不是 Vertex 可用的 Key"
@@ -847,7 +885,12 @@ def list_models() -> Dict[str, Any]:
 
 @app.get("/v1/models/{model_id}")
 def get_model(model_id: str) -> Dict[str, Any]:
-    return {"id": model_id, "object": "model", "created": int(time.time()), "owned_by": "google"}
+    return {
+        "id": model_id,
+        "object": "model",
+        "created": int(time.time()),
+        "owned_by": "google",
+    }
 
 
 @app.post("/v1/chat/completions")
@@ -862,7 +905,9 @@ async def chat_completions(req: ChatRequest, request: Request):
     if san.total:
         log.info("脱敏 %d 处 %s", san.total, san.counts)
     if _flag("SANITIZE_DEBUG") and san.total:
-        log.info("出站内容: %s", json.dumps(body.get("messages"), ensure_ascii=False)[:1000])
+        log.info(
+            "出站内容: %s", json.dumps(body.get("messages"), ensure_ascii=False)[:1000]
+        )
 
     system, contents = build_contents(body.get("messages") or [])
 
@@ -946,7 +991,9 @@ async def chat_completions(req: ChatRequest, request: Request):
                     {
                         "index": 0,
                         "message": message,
-                        "finish_reason": "tool_calls" if tool_calls else _finish_reason(resp),
+                        "finish_reason": (
+                            "tool_calls" if tool_calls else _finish_reason(resp)
+                        ),
                     }
                 ],
                 "usage": _usage(resp),
@@ -1060,11 +1107,15 @@ async def chat_completions(req: ChatRequest, request: Request):
                     except Exception:
                         args = {}
                     call_parts.append(
-                        types.Part(function_call=types.FunctionCall(name=fn["name"], args=args))
+                        types.Part(
+                            function_call=types.FunctionCall(name=fn["name"], args=args)
+                        )
                     )
                     kind = server_tool_kind(fn["name"]) or "search"
                     result = run_server_tool(client, model, kind, args)
-                    log.info("服务端代执行(流式) %s -> %d 字符", fn["name"], len(result))
+                    log.info(
+                        "服务端代执行(流式) %s -> %d 字符", fn["name"], len(result)
+                    )
                     fn_parts.append(
                         types.Part(
                             function_response=types.FunctionResponse(
@@ -1120,14 +1171,24 @@ async def chat_completions(req: ChatRequest, request: Request):
             )
         except Exception as exc:
             log.exception("流式调用失败")
-            yield sse({"error": {"message": _upstream_msg(exc, model),
-                                 "type": "upstream_error"}})
+            yield sse(
+                {
+                    "error": {
+                        "message": _upstream_msg(exc, model),
+                        "type": "upstream_error",
+                    }
+                }
+            )
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )
 
 

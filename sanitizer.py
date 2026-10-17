@@ -10,6 +10,7 @@ sanitizer.py
 * 占位符形如 ``[[SECRET_1]]``，模型基本会原样回显，因此响应里可以精确还原。
 * 每轮请求单独一份映射，不跨请求复用（避免把上一轮的原文带进这一轮）。
 """
+
 from __future__ import annotations
 
 import re
@@ -67,7 +68,9 @@ SECRET_RULES: List[Tuple[str, "re.Pattern[str]"]] = [
     # JWT
     (
         "TOKEN",
-        re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b"),
+        re.compile(
+            r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b"
+        ),
     ),
     # Authorization 头里的凭据
     (
@@ -125,8 +128,8 @@ class Sanitizer:
         self.use_pii = pii
         self.use_network = network
         self.restore_enabled = restore
-        self.map: Dict[str, str] = {}          # "SECRET_1" -> 原文
-        self.counts: Dict[str, int] = {}       # 标签 -> 次数
+        self.map: Dict[str, str] = {}  # "SECRET_1" -> 原文
+        self.counts: Dict[str, int] = {}  # 标签 -> 次数
 
     # ---------------------------------------------------------- 内部
     def _ph(self, label: str, value: str) -> str:

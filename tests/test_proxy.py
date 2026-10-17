@@ -49,7 +49,9 @@ def _part(text=None, fc=None, signature=None):
 def resp_text(text, finish="STOP"):
     return _ns(
         text=text,
-        candidates=[_ns(content=_ns(parts=[_part(text=text)]), finish_reason=_ns(name=finish))],
+        candidates=[
+            _ns(content=_ns(parts=[_part(text=text)]), finish_reason=_ns(name=finish))
+        ],
         usage_metadata=USAGE,
     )
 
@@ -78,7 +80,7 @@ def chunk(text):
 class FakeModels:
     def __init__(self, script):
         self.script = list(script)
-        self.calls = []      # [(model, contents, config)]
+        self.calls = []  # [(model, contents, config)]
         self.n = 0
 
     def _take(self):
@@ -187,13 +189,16 @@ def test_parallel_calls_merged_into_one_turn():
     msgs = [{"role": "user", "content": "读 5 个文件"}]
     calls = [_call(i) for i in range(5)]
     msgs.append({"role": "assistant", "content": None, "tool_calls": calls})
-    msgs += [{"role": "tool", "tool_call_id": "call_%d" % i, "content": "x%d" % i} for i in range(5)]
+    msgs += [
+        {"role": "tool", "tool_call_id": "call_%d" % i, "content": "x%d" % i}
+        for i in range(5)
+    ]
     msgs.append({"role": "user", "content": "总结"})
 
     _system, contents = vp.build_contents(msgs)
     assert [c.role for c in contents] == ["user", "model", "user", "user"]
-    assert len(contents[1].parts) == 5          # 5 个 function_call
-    assert len(contents[2].parts) == 5          # 5 个 function_response 在同一个 turn
+    assert len(contents[1].parts) == 5  # 5 个 function_call
+    assert len(contents[2].parts) == 5  # 5 个 function_response 在同一个 turn
     assert all(p.function_response for p in contents[2].parts)
 
 
@@ -202,7 +207,10 @@ def test_missing_tool_result_is_padded():
     calls = [_call(i) for i in range(5)]
     msgs.append({"role": "assistant", "content": None, "tool_calls": calls})
     # 只回 4 个结果
-    msgs += [{"role": "tool", "tool_call_id": "call_%d" % i, "content": "x"} for i in range(4)]
+    msgs += [
+        {"role": "tool", "tool_call_id": "call_%d" % i, "content": "x"}
+        for i in range(4)
+    ]
 
     _system, contents = vp.build_contents(msgs)
     assert len(contents[2].parts) == 5, "缺结果必须补占位，否则上游 400"
@@ -226,25 +234,40 @@ def test_function_response_not_merged_with_text():
 def test_thought_signature_reused_when_client_replays_history(client, fake):
     fc = fake([resp_calls([("Bash", {"command": "ls"})]), resp_text("ok")])
 
-    r1 = client.post("/v1/chat/completions", json=_payload(
-        tools=[{"type": "function",
-                "function": {"name": "Bash", "description": "run",
-                             "parameters": {"type": "object",
-                                            "properties": {"command": {"type": "string"}}}}}],
-    ))
+    r1 = client.post(
+        "/v1/chat/completions",
+        json=_payload(
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "Bash",
+                        "description": "run",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                        },
+                    },
+                }
+            ],
+        ),
+    )
     assert r1.status_code == 200
     call = r1.json()["choices"][0]["message"]["tool_calls"][0]
     assert call["function"]["name"] == "Bash"
 
     # 把模型这轮调用 + 结果回传，模拟客户端第二步
-    r2 = client.post("/v1/chat/completions", json=_payload(
-        messages=[
-            {"role": "user", "content": "hi"},
-            {"role": "assistant", "content": None, "tool_calls": [call]},
-            {"role": "tool", "tool_call_id": call["id"], "content": "a.py"},
-            {"role": "user", "content": "列出文件名"},
-        ],
-    ))
+    r2 = client.post(
+        "/v1/chat/completions",
+        json=_payload(
+            messages=[
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": None, "tool_calls": [call]},
+                {"role": "tool", "tool_call_id": call["id"], "content": "a.py"},
+                {"role": "user", "content": "列出文件名"},
+            ],
+        ),
+    )
     assert r2.status_code == 200
 
     contents = fc.models.calls[-1][1]
@@ -257,24 +280,43 @@ def test_thought_signature_reused_when_client_replays_history(client, fake):
 # --------------------------------------------------------------------------
 def test_server_tool_bridge_executes_search(client, fake, monkeypatch):
     monkeypatch.setenv("BRIDGE_SEARCH_MODEL", "gemini-2.5-flash")
-    fc = fake([
-        resp_calls([("Google:web_search", {"query": "沈阳天气"})]),
-        resp_text("沈阳 25 度，多云"),
-        resp_text("沈阳今天 25 度，多云。"),
-    ])
+    fc = fake(
+        [
+            resp_calls([("Google:web_search", {"query": "沈阳天气"})]),
+            resp_text("沈阳 25 度，多云"),
+            resp_text("沈阳今天 25 度，多云。"),
+        ]
+    )
 
-    r = client.post("/v1/chat/completions", json=_payload(
-        tools=[
-            {"type": "function",
-             "function": {"name": "Google:web_search", "description": "搜索",
-                          "parameters": {"type": "object",
-                                         "properties": {"query": {"type": "string"}}}}},
-            {"type": "function",
-             "function": {"name": "Bash", "description": "run",
-                          "parameters": {"type": "object",
-                                         "properties": {"command": {"type": "string"}}}}},
-        ],
-    ))
+    r = client.post(
+        "/v1/chat/completions",
+        json=_payload(
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "Google:web_search",
+                        "description": "搜索",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "Bash",
+                        "description": "run",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                        },
+                    },
+                },
+            ],
+        ),
+    )
     assert r.status_code == 200
     body = r.json()
     msg = body["choices"][0]["message"]
@@ -291,7 +333,9 @@ def test_retry_on_429(client, fake, monkeypatch):
     monkeypatch.setenv("RETRY_MAX_ATTEMPTS", "3")
     monkeypatch.setenv("RETRY_BASE_DELAY", "0")
     monkeypatch.setenv("RETRY_MAX_DELAY", "0")
-    fc = fake([Exception("429 RESOURCE_EXHAUSTED. rate limited"), resp_text("retried ok")])
+    fc = fake(
+        [Exception("429 RESOURCE_EXHAUSTED. rate limited"), resp_text("retried ok")]
+    )
 
     r = client.post("/v1/chat/completions", json=_payload())
     assert r.status_code == 200
@@ -333,7 +377,7 @@ def test_stream_sse(client, fake):
     [
         ("google/gemini-4-argon", "gemini-4-argon"),
         ("models/gemini-3.8-flash", "gemini-3.8-flash"),
-        ("google/gemini-2.0-flash", "gemini-2.5-flash"),   # 别名改写
+        ("google/gemini-2.0-flash", "gemini-2.5-flash"),  # 别名改写
         ("gemini-1.5-pro", "gemini-2.5-pro"),
     ],
 )
@@ -346,9 +390,12 @@ def test_model_normalization(given, expected):
 # --------------------------------------------------------------------------
 def test_secret_masked_before_upstream_and_restored(client, fake):
     fc = fake([resp_text("DB_PASSWORD=[[SECRET_1]]")])
-    r = client.post("/v1/chat/completions", json=_payload(
-        messages=[{"role": "user", "content": "DB_PASSWORD=Passw0rd!2026"}],
-    ))
+    r = client.post(
+        "/v1/chat/completions",
+        json=_payload(
+            messages=[{"role": "user", "content": "DB_PASSWORD=Passw0rd!2026"}],
+        ),
+    )
     assert r.status_code == 200
 
     sent = fc.models.calls[0][1][0].parts[0].text
