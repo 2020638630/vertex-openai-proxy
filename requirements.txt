@@ -1,0 +1,7 @@
+# 运行时依赖（Python 3.12+）
+google-genai==2.31.0
+fastapi==0.115.0
+uvicorn==0.52.3
+python-dotenv==1.2.2
+pydantic==2.13.4
+httpx==0.28.1

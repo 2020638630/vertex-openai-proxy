@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# 开发/测试依赖
+pytest==9.1.1
+black==26.10.1
