@@ -44,6 +44,24 @@ python vertex_openai_proxy.py
 
 服务账号模式需要该账号有 `roles/aiplatform.user`，密钥文件不要入库（已在 `.gitignore`）。
 
+## Claude（AnthropicVertex）
+
+`model` 以 `claude-` 开头时走独立分支，用官方 `anthropic[vertex]` SDK 转发，消息/工具双向转换由 `claude_adapter.py` 负责。
+
+| 项 | 值 |
+| --- | --- |
+| 区域 | **只能是 `global`**（`us-east5` / `us-central1` / `europe-west1` 实测全部 404） |
+| 凭证 | 复用 `VERTEX_SA_JSON`（服务账号 JSON） |
+| 已确认存在的模型 ID | `claude-sonnet-4-5@20250929`、`claude-opus-4-5@20251101`、`claude-haiku-4-5@20251001` |
+| 本项目不可用 | `claude-3-7-sonnet@20250219`、`claude-3-5-sonnet-v2@20241022`、`claude-3-5-haiku@20241022`（404） |
+
+> ⚠️ 2026-10-17 实测：上述三个模型**都存在但配额为 0**，调用返回
+> `429 Quota exceeded for ... online_prediction_requests_per_base_model`。
+> 需要在控制台 IAM → 配额里按 `base model = anthropic-claude-*` 申请提额，
+> 批下来才能实际返回内容。代码侧无需再改。
+
+可用环境变量：`CLAUDE_REGION`（默认 `global`）、`CLAUDE_PROJECT`（默认同 `GOOGLE_CLOUD_PROJECT`）。
+
 ## 主要能力
 
 - **消息映射**：`system` → `system_instruction`；`assistant` → `model`；连续同角色合并；`function_response` 强制独立成 turn（否则上游 400）

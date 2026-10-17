@@ -40,6 +40,11 @@ from pydantic import BaseModel, ConfigDict
 
 from sanitizer import Sanitizer, StreamRestorer
 
+try:  # anthropic 是可选依赖：没装也不影响 Gemini 链路
+    import claude_adapter
+except Exception:  # pragma: no cover
+    claude_adapter = None  # type: ignore[assignment]
+
 # 日志固定 UTF-8 输出，避免 Windows 下重定向到文件时按 GBK 写坏中文
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -65,6 +70,11 @@ MODELS = [
     "gemini-2.5-pro",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
+    # Claude（AnthropicVertex，仅 location=global）；模型存在但默认配额为 0，
+    # 需在控制台按 base model 申请 online_prediction 配额后才能调用
+    "claude-sonnet-4-5@20250929",
+    "claude-opus-4-5@20251101",
+    "claude-haiku-4-5@20251001",
 ]
 
 # 常见但当前项目不可用的名字 -> 自动改写到可用模型，避免客户端硬编码 404
@@ -861,6 +871,131 @@ def _upstream_msg(exc: Exception, model: str) -> str:
 # --------------------------------------------------------------------------
 # 路由
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Claude（AnthropicVertex）分支
+# --------------------------------------------------------------------------
+def _sse(obj: Any) -> str:
+    return "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
+
+
+def _chunk_obj(
+    cid: str, created: int, model: str, delta: Dict[str, Any], finish: Any = None
+):
+    return {
+        "id": cid,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+    }
+
+
+def _claude_err(exc: Exception) -> str:
+    s = str(exc)
+    text = "Claude: " + s
+    if "429" in s or "RESOURCE_EXHAUSTED" in s:
+        text += (
+            " | 提示：该 Claude 模型的在线预测配额为 0。去控制台 IAM→配额，"
+            "按 base model `anthropic-claude-*` 申请提额后再试"
+        )
+    elif "404" in s:
+        text += (
+            " | 提示：模型 ID 不存在或项目未启用。实测 Claude 只在 location=global 上架，"
+            "其他区域一律 404；可用 ID 见 /v1/models"
+        )
+    elif "PERMISSION_DENIED" in s or "403" in s:
+        text += " | 提示：服务账号缺少 roles/aiplatform.user，或该模型未在 Model Garden 启用"
+    return text
+
+
+async def _claude_completions(
+    body: Dict[str, Any], san: Sanitizer, model: str, stream: bool
+):
+    if claude_adapter is None:
+        return _err(
+            '未安装 anthropic SDK：pip install "anthropic[vertex]"', 500, "config_error"
+        )
+    try:
+        client = claude_adapter.get_client()
+    except Exception as exc:
+        return _err(str(exc), 500, "config_error")
+
+    kwargs = claude_adapter.build_kwargs(body, model)
+    cid = "chatcmpl-" + uuid.uuid4().hex[:24]
+    created = int(time.time())
+
+    # ---------------- 非流式 ----------------
+    if not stream:
+        try:
+            resp = await run_in_threadpool(claude_adapter.create, client, kwargs)
+        except Exception as exc:
+            log.exception("Claude 非流式失败")
+            return _err(_claude_err(exc), 502, "upstream_error")
+
+        payload = claude_adapter.to_openai(resp, model, cid, created)
+        msg = payload["choices"][0]["message"]
+        if msg.get("content"):
+            msg["content"] = san.restore(msg["content"])
+        for tc in msg.get("tool_calls") or []:
+            tc["function"]["arguments"] = san.restore(tc["function"]["arguments"])
+        log.info(
+            "POST stream=False provider=claude model=%s tool_calls=%d",
+            model,
+            len(msg.get("tool_calls") or []),
+        )
+        return JSONResponse(payload)
+
+    # ---------------- 流式 ----------------
+    gen = claude_adapter.iter_stream(client, kwargs)
+    try:
+        first = await run_in_threadpool(next, gen, None)
+    except Exception as exc:
+        log.exception("Claude 建流失败")
+        return _err(_claude_err(exc), 502, "upstream_error")
+
+    def event_stream():
+        restorer = StreamRestorer(san)
+        finish = "stop"
+        try:
+            events = itertools.chain([first], gen) if first is not None else gen
+            for ev in events:
+                if ev["type"] == "text":
+                    piece = restorer.feed(ev["text"])
+                    if piece:
+                        yield _sse(_chunk_obj(cid, created, model, {"content": piece}))
+                elif ev["type"] == "tool_calls":
+                    calls = ev["calls"]
+                    for i, c in enumerate(calls):
+                        c["function"]["arguments"] = san.restore(
+                            c["function"]["arguments"]
+                        )
+                        c["index"] = i
+                    yield _sse(_chunk_obj(cid, created, model, {"tool_calls": calls}))
+                    finish = "tool_calls"
+                elif ev["type"] == "finish":
+                    finish = ev["reason"]
+            tail = restorer.flush()
+            if tail:
+                yield _sse(_chunk_obj(cid, created, model, {"content": tail}))
+            yield _sse(_chunk_obj(cid, created, model, {}, finish))
+            yield "data: [DONE]\n\n"
+            log.info(
+                "POST stream=True provider=claude model=%s finish=%s", model, finish
+            )
+        except Exception as exc:
+            log.exception("Claude 流式失败")
+            yield _sse(
+                {"error": {"message": _claude_err(exc), "type": "upstream_error"}}
+            )
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/")
 def root() -> Dict[str, Any]:
     return {
@@ -908,6 +1043,10 @@ async def chat_completions(req: ChatRequest, request: Request):
         log.info(
             "出站内容: %s", json.dumps(body.get("messages"), ensure_ascii=False)[:1000]
         )
+
+    # claude-* 走 AnthropicVertex 分支（Gemini 与 Claude 结构不兼容，必须分开转换）
+    if model.lower().startswith("claude"):
+        return await _claude_completions(body, san, model, stream)
 
     system, contents = build_contents(body.get("messages") or [])
 
