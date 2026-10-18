@@ -105,6 +105,20 @@ python vertex_openai_proxy.py
 | `RETRY_MAX_ATTEMPTS` | 4 | 429 重试次数（间隔 5/10/20s） |
 | `THINKING_BUDGET` | 空 | 思考预算；2.5-flash 可设 0，2.5-pro 最小 128 |
 
+## 日志
+
+写入 `logs/proxy.log`（UTF-8），按大小自动切分，**磁盘占用封顶**：
+
+```
+LOG_MAX_MB=5      单文件上限
+LOG_BACKUPS=5     保留份数
+→ proxy.log / proxy.log.1 … .5，总计约 30 MB
+```
+
+日志同时打到控制台；启动时会打印实际文件路径。`logs/` 已在 `.gitignore` 中。
+
+字段格式：`时间 级别 模块 内容`，其中模块区分 `vertex-proxy`（业务）、`uvicorn.access`（访问）、`httpx`（上游请求）。
+
 ## 测试
 
 ```powershell

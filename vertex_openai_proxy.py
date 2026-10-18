@@ -17,6 +17,7 @@ import base64
 import itertools
 import json
 import logging
+import logging.handlers
 import os
 import random
 import sys
@@ -52,12 +53,54 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-7s %(message)s",
-    datefmt="%H:%M:%S",
-)
+# --------------------------------------------------------------------------
+# 日志：控制台 + 按大小切分的文件日志（本机磁盘有限，默认封顶 30MB）
+# --------------------------------------------------------------------------
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+
+
+def _num_env(key: str, default: float) -> float:
+    try:
+        return float(os.getenv(key, str(default)) or default)
+    except ValueError:
+        return default
+
+
+def setup_logging() -> str:
+    """返回日志文件路径；失败时退化为仅控制台。"""
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-7s %(name)-12s %(message)s", "%Y-%m-%d %H:%M:%S"
+    )
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+    root.addHandler(console)
+
+    path = os.path.join(LOG_DIR, "proxy.log")
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        max_mb = max(0.2, _num_env("LOG_MAX_MB", 5))
+        backups = max(1, int(_num_env("LOG_BACKUPS", 5)))
+        fh = logging.handlers.RotatingFileHandler(
+            path,
+            maxBytes=int(max_mb * 1024 * 1024),
+            backupCount=backups,
+            encoding="utf-8",
+        )
+        fh.setFormatter(fmt)
+        root.addHandler(fh)
+    except Exception as exc:  # 磁盘只读之类，不能因为日志挂了导致服务起不来
+        logging.getLogger("vertex-proxy").warning("文件日志初始化失败: %s", exc)
+        return ""
+    return path
+
+
 log = logging.getLogger("vertex-proxy")
+LOG_FILE = setup_logging()
 
 HOST = os.getenv("PROXY_HOST", "127.0.0.1")
 PORT = int(os.getenv("PROXY_PORT", "4000") or 4000)
@@ -1335,4 +1378,11 @@ if __name__ == "__main__":
     import uvicorn
 
     log.info("Base URL: http://%s:%d/v1", HOST, PORT)
-    uvicorn.run(app, host=HOST, port=PORT, log_level="info")
+    log.info(
+        "日志文件: %s（单个上限 %s MB，保留 %s 份）",
+        LOG_FILE or "<仅控制台>",
+        os.getenv("LOG_MAX_MB", "5"),
+        os.getenv("LOG_BACKUPS", "5"),
+    )
+    # log_config=None：不再让 uvicorn 覆盖 handler，访问日志统一走根 logger（含文件轮转）
+    uvicorn.run(app, host=HOST, port=PORT, log_level="info", log_config=None)
