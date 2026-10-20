@@ -372,7 +372,13 @@ def iter_stream(client: Any, kwargs: Dict[str, Any]) -> Iterator[Dict[str, Any]]
 
     if calls:
         yield {"type": "tool_calls", "calls": calls}
+
+    usage = getattr(final, "usage", None)
     yield {
         "type": "finish",
         "reason": normalize_stop(getattr(final, "stop_reason", None), bool(calls)),
+        "usage": {
+            "in": int(getattr(usage, "input_tokens", 0) or 0),
+            "out": int(getattr(usage, "output_tokens", 0) or 0),
+        },
     }
