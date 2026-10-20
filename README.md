@@ -105,6 +105,37 @@ python vertex_openai_proxy.py
 | `RETRY_MAX_ATTEMPTS` | 4 | 429 重试次数（间隔 5/10/20s） |
 | `THINKING_BUDGET` | 空 | 思考预算；2.5-flash 可设 0，2.5-pro 最小 128 |
 
+## 用量与限额
+
+每次请求都会记一行到 `data/usage/YYYY-MM-DD.jsonl`（保留 14 天，`data/` 已忽略）：
+
+```json
+{"ts":"22:04:46","model":"gemini-3.8-flash","provider":"gemini","in":7,"out":2,"ms":4196,"ok":true,"tools":0}
+```
+
+- 记账在**响应完成后**写入，重启会从当天文件重建计数，不会清零
+- 启动时读回当天账本，所以重启不影响当日累计
+
+### 三档限额
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `RPM_LIMIT` | 30 | 60 秒滑动窗口，防 Agent 死循环 |
+| `DAILY_REQ_LIMIT` | 500 | 每日请求数 |
+| `DAILY_TOKEN_LIMIT` | 2,000,000 | 每日 in+out token |
+| `LIMIT_MODE` | `warn` | `warn` 只记日志；`block` 才返回 429 |
+
+默认 **warn**：超了只在 `logs/proxy.log` 里留一条 `[额度预警]`，不影响任务。
+观察一段时间觉得水位合适，把 `LIMIT_MODE=block` 打开即可硬拦（返回 429 + `Retry-After`）。
+
+### 查看用量
+
+```
+GET /stats                 今日 + 近 7 日，JSON
+GET /stats?format=html     一屏页面（浏览器直接打开）
+GET /healthz               存活探针 + 当前限额模式
+```
+
 ## 日志
 
 写入 `logs/proxy.log`（UTF-8），按大小自动切分，**磁盘占用封顶**：

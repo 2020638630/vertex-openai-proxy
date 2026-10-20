@@ -8,6 +8,7 @@ vertex-sa.json
 application_default_credentials.json
 
 # ===== 运行产物 =====
+data/
 Temp/
 logs/
 *.log

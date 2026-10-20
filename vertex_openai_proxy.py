@@ -36,13 +36,14 @@ load_dotenv(override=True)
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, ConfigDict
 
 from sanitizer import Sanitizer, StreamRestorer
+from usage import BudgetExceeded, Usage
 
 try:  # anthropic 是可选依赖：没装也不影响 Gemini 链路
     import claude_adapter
@@ -108,6 +109,9 @@ def setup_logging() -> str:
 
 log = logging.getLogger("vertex-proxy")
 LOG_FILE = setup_logging()
+
+USAGE = Usage()
+START_TS = time.time()
 
 HOST = os.getenv("PROXY_HOST", "127.0.0.1")
 PORT = int(os.getenv("PROXY_PORT", "4000") or 4000)
@@ -974,6 +978,21 @@ def _err(message: str, status: int = 500, etype: str = "proxy_error") -> JSONRes
     )
 
 
+def _budget_response(exc: BudgetExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": {
+                "message": "[额度] %s。明日 00:00 重置，或调高 .env 里的限额"
+                "（当前 LIMIT_MODE=block 才会拦截，设 warn 则只记日志）" % exc,
+                "type": "rate_limit",
+                "code": 429,
+            }
+        },
+        headers={"Retry-After": str(getattr(exc, "retry_after", 60))},
+    )
+
+
 def _upstream_msg(exc: Exception, model: str) -> str:
     """把 SDK 异常翻译成对客户端有用的提示。"""
     if isinstance(exc, UpstreamUnreachable):
@@ -1058,6 +1077,7 @@ def _claude_err(exc: Exception) -> str:
 async def _claude_completions(
     body: Dict[str, Any], san: Sanitizer, model: str, stream: bool
 ):
+    t0 = time.time()
     if claude_adapter is None:
         return _err(
             '未安装 anthropic SDK：pip install "anthropic[vertex]"', 500, "config_error"
@@ -1090,6 +1110,16 @@ async def _claude_completions(
             model,
             len(msg.get("tool_calls") or []),
         )
+        u = payload.get("usage") or {}
+        USAGE.record(
+            model,
+            u.get("prompt_tokens", 0),
+            u.get("completion_tokens", 0),
+            int((time.time() - t0) * 1000),
+            ok=True,
+            tools=len(msg.get("tool_calls") or []),
+            provider="claude",
+        )
         return JSONResponse(payload)
 
     # ---------------- 流式 ----------------
@@ -1103,6 +1133,7 @@ async def _claude_completions(
     def event_stream():
         restorer = StreamRestorer(san)
         finish = "stop"
+        claude_usage: Dict[str, int] = {}
         try:
             events = itertools.chain([first], gen) if first is not None else gen
             for ev in events:
@@ -1121,6 +1152,7 @@ async def _claude_completions(
                     finish = "tool_calls"
                 elif ev["type"] == "finish":
                     finish = ev["reason"]
+                    claude_usage = ev.get("usage") or {}
             tail = restorer.flush()
             if tail:
                 yield _sse(_chunk_obj(cid, created, model, {"content": tail}))
@@ -1128,6 +1160,14 @@ async def _claude_completions(
             yield "data: [DONE]\n\n"
             log.info(
                 "POST stream=True provider=claude model=%s finish=%s", model, finish
+            )
+            USAGE.record(
+                model,
+                claude_usage.get("in", 0),
+                claude_usage.get("out", 0),
+                int((time.time() - t0) * 1000),
+                ok=True,
+                provider="claude",
             )
         except Exception as exc:
             log.exception("Claude 流式失败")
@@ -1175,11 +1215,80 @@ def get_model(model_id: str) -> Dict[str, Any]:
     }
 
 
+@app.get("/healthz")
+def healthz() -> Dict[str, Any]:
+    return {"ok": True, "limit_mode": USAGE.mode, "uptime": int(time.time() - START_TS)}
+
+
+def _stats_html(data: Dict[str, Any]) -> str:
+    today = data.get("today") or {}
+    limits = today.get("limits") or {}
+    rows = "".join(
+        "<tr><td>{d}</td><td>{r}</td><td>{t:,}</td><td>{f}</td></tr>".format(
+            d=x.get("date", ""),
+            r=x.get("requests", 0),
+            t=int(x.get("tokens", 0)),
+            f=x.get("fail", 0),
+        )
+        for x in data.get("daily", [])
+    )
+    by_model = "".join(
+        "<li>{} <b>{}</b></li>".format(k, v)
+        for k, v in (today.get("by_model") or {}).items()
+    )
+    return (
+        """<!doctype html><meta charset="utf-8"><title>proxy stats</title>
+<style>
+ body{font-family:system-ui,"Segoe UI","Microsoft YaHei";background:#0f1115;color:#e6e8ee;margin:32px}
+ h2{font-weight:600;margin:0 0 4px} .sub{color:#8b93a7;font-size:13px;margin-bottom:18px}
+ table{border-collapse:collapse;font-size:14px} td,th{padding:6px 14px;border-bottom:1px solid #232838;text-align:left}
+ .card{background:#161a23;border:1px solid #232838;border-radius:10px;padding:14px 18px;margin-bottom:16px}
+ .k{color:#8b93a7;font-size:12px} .v{font-size:20px;font-weight:600}
+ ul{margin:6px 0 0;padding-left:18px} li{margin:2px 0}
+</style>
+<h2>Vertex OpenAI Proxy</h2>
+<div class="sub">DATE · 模式 MODE · 上限 RPMV 次/分 · 日请求 DREQ · 日 token DTOK</div>
+<div class="card">
+  <span class="k">今日请求</span> <span class="v">REQ</span> &nbsp;&nbsp;
+  <span class="k">今日 tokens</span> <span class="v">TOK</span> &nbsp;&nbsp;
+  <span class="k">失败</span> <span class="v">FAIL</span>
+  <ul>MODELS</ul>
+</div>
+<table><tr><th>日期</th><th>请求</th><th>tokens</th><th>失败</th></tr>ROWS</table>
+""".replace("MODELS", by_model or "<li style='color:#8b93a7'>暂无</li>")
+        .replace("DTOK", "{:,}".format(int(limits.get("daily_tokens", 0) or 0)))
+        .replace("DREQ", str(limits.get("daily_requests", "-")))
+        .replace("DATE", str(today.get("date", "")))
+        .replace("MODE", str(today.get("mode", "")))
+        .replace("RPMV", str(limits.get("rpm", "-")))
+        .replace("TOK", "{:,}".format(int(today.get("tokens_total", 0))))
+        .replace("REQ", str(today.get("requests", 0)))
+        .replace("FAIL", str(today.get("fail", 0)))
+        .replace("ROWS", rows)
+    )
+
+
+@app.get("/stats")
+def stats(days: int = 7, format: str = "json"):
+    data = USAGE.stats(days=max(1, min(days, 90)))
+    if (format or "").lower() == "html":
+        return HTMLResponse(_stats_html(data))
+    return data
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(req: ChatRequest, request: Request):
     body = req.model_dump()
     model = normalize_model(body.get("model"))
     stream = bool(body.get("stream"))
+    t0 = time.time()
+
+    # 用量守卫：warn 模式只记日志，block 模式才返回 429
+    try:
+        USAGE.check()
+    except BudgetExceeded as exc:
+        log.warning("额度拦截: %s", exc)
+        return _budget_response(exc)
 
     # 出站脱敏：在转换成 Gemini 结构之前，先把密钥/口令/隐私换成占位符
     san = _make_sanitizer()
@@ -1292,9 +1401,21 @@ async def chat_completions(req: ChatRequest, request: Request):
                 len(body.get("tools") or []),
                 [c["function"]["name"] for c in tool_calls],
             )
+            u = _usage(resp)
+            USAGE.record(
+                model,
+                u["prompt_tokens"],
+                u["completion_tokens"],
+                int((time.time() - t0) * 1000),
+                ok=True,
+                tools=len(tool_calls),
+            )
             return JSONResponse(payload)
         except Exception as exc:
             log.exception("非流式调用失败")
+            USAGE.record(
+                model, ms=int((time.time() - t0) * 1000), ok=False, error=str(exc)
+            )
             return _err(_upstream_msg(exc, model), 502, "upstream_error")
 
     # ---------------- 流式 SSE ----------------
@@ -1455,8 +1576,19 @@ async def chat_completions(req: ChatRequest, request: Request):
                 len(body.get("tools") or []),
                 [c["function"]["name"] for c in pending_calls],
             )
+            USAGE.record(
+                model,
+                last_usage.get("prompt_tokens", 0),
+                last_usage.get("completion_tokens", 0),
+                int((time.time() - t0) * 1000),
+                ok=True,
+                tools=len(pending_calls),
+            )
         except Exception as exc:
             log.exception("流式调用失败")
+            USAGE.record(
+                model, ms=int((time.time() - t0) * 1000), ok=False, error=str(exc)
+            )
             yield sse(
                 {
                     "error": {
