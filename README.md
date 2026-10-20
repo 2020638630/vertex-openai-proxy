@@ -128,6 +128,21 @@ python -m pytest        # 15 个用例，约 1 秒，零网络、不需要 Key
 
 用例覆盖历史踩过的坑：并行工具合并、`function_response` 不合并、`thought_signature` 回传、服务端工具桥接、429 重试、硬错误 HTTP 化、脱敏往返、流式拆包。
 
+## 常见报错对照
+
+| 客户端看到的现象 | 真正原因 | 处理 |
+| --- | --- | --- |
+| 连接被拒绝 / 无法连接 127.0.0.1:4000 | **本代理没启动** | 双击 `start_proxy.bat`，或 `python vertex_openai_proxy.py` |
+| `[网络不可达] 本地代理 127.0.0.1:7897 连不上` | Clash / VPN 没开，或换了端口 | 开代理；改 `.env` 的 `VERTEX_PROXY` |
+| `[网络不可达] 本机连不上 Google` | 没联网，或未配代理且被墙 | 检查网络；配 `VERTEX_PROXY` |
+| `本机到 Google 的连接不通或被打断` | 节点抖动、TLS 被重置 | 代理已自动重试过，换节点或稍后重发 |
+| `429 RESOURCE_EXHAUSTED` | 配额/速率用尽 | 等 30~60 秒；或改用 flash；Claude 需先申请配额 |
+| `missing a thought_signature` | 代理重启导致签名缓存丢失 | 新建对话；或改用 2.5 系列 |
+| `404 NOT_FOUND ... publishers/.../models/X` | 模型 ID 不存在或区域不对 | Gemini 用 `location=global`；Claude 也仅 global |
+
+> 网络类错误现在会**先预检再决定要不要重试**：代理端口不通、DNS 失败这类直接返回，
+> 不会让你干等 30 秒。链路抖动（超时/连接被重置）才走 5s→10s→20s 重试。
+
 ## 已知限制
 
 - 图片仅支持 `data:` base64，远程 URL 未验证

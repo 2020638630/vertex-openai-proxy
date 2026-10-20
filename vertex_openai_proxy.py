@@ -20,6 +20,8 @@ import logging
 import logging.handlers
 import os
 import random
+import re
+import socket
 import sys
 import time
 import uuid
@@ -31,6 +33,7 @@ from dotenv import load_dotenv
 # 必须早于读取环境变量，且 override=True 让 .env 覆盖 shell 里的空值
 load_dotenv(override=True)
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -79,6 +82,10 @@ def setup_logging() -> str:
     console = logging.StreamHandler()
     console.setFormatter(fmt)
     root.addHandler(console)
+
+    # 测试或临时调试可以只打控制台，避免污染生产日志（conftest 会设 0）
+    if (os.getenv("LOG_TO_FILE") or "1").strip().lower() in ("0", "false", "no", "off"):
+        return ""
 
     path = os.path.join(LOG_DIR, "proxy.log")
     try:
@@ -719,7 +726,81 @@ def run_server_tool(client: Any, model: str, kind: str, args: Any) -> str:
 
 
 # --------------------------------------------------------------------------
-# 上游重试：429/503/500 自动退避重试，避免一次限流就打挂整个 Agent 回合
+# 链路预检：区分「值得重试」和「重试也没用」
+# 没开代理 / 没联网 / DNS 挂了 —— 重试只会让用户多等，直接给人话。
+# --------------------------------------------------------------------------
+class UpstreamUnreachable(RuntimeError):
+    """本地网络或代理不通，重试没有意义。"""
+
+
+_NO_RETRY_MARKERS = (
+    "connection refused",
+    "actively refused",
+    "winerror 10061",
+    "getaddrinfo",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "no route to host",
+    "network is unreachable",
+)
+
+_NET_ERRORS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.RemoteProtocolError,
+    httpx.PoolTimeout,
+)
+
+
+def _proxy_endpoint() -> Optional[Tuple[str, int]]:
+    proxy = (
+        os.getenv("VERTEX_PROXY")
+        or os.getenv("HTTPS_PROXY")
+        or os.getenv("HTTP_PROXY")
+        or ""
+    ).strip()
+    m = re.match(r"^(?:https?|socks5h?)://([^:/]+):(\d+)", proxy)
+    return (m.group(1), int(m.group(2))) if m else None
+
+
+def _tcp_ok(host: str, port: int, timeout: float = 1.5) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+_pf_until = 0.0
+
+
+def preflight_network(force: bool = False) -> None:
+    """开跑前探一次链路。不通就抛 UpstreamUnreachable（带人话），不做重试。"""
+    global _pf_until
+    if (os.getenv("PREFLIGHT") or "1").strip().lower() in ("0", "false", "no", "off"):
+        return
+    now = time.time()
+    if not force and now < _pf_until:
+        return
+
+    ep = _proxy_endpoint()
+    if ep:
+        if not _tcp_ok(*ep):
+            raise UpstreamUnreachable(
+                "本地代理 %s:%d 连不上 —— Clash / VPN 可能没启动，或换了端口。"
+                "开启后再发一次即可（这种情况重试没有意义，已直接返回）" % ep
+            )
+    elif not _tcp_ok("aiplatform.googleapis.com", 443, 3.0):
+        raise UpstreamUnreachable(
+            "本机连不上 Google（aiplatform.googleapis.com:443）—— "
+            "可能没联网，或需要开启代理 / VPN。检查网络后再试"
+        )
+    _pf_until = now + 10
+
+
+# --------------------------------------------------------------------------
+# 上游重试：限流与网络抖动自动退避，配置类错误立刻失败
 # --------------------------------------------------------------------------
 def _retry_cfg() -> Tuple[int, float, float]:
     def _num(key: str, default: str) -> float:
@@ -736,11 +817,15 @@ def _retry_cfg() -> Tuple[int, float, float]:
 
 
 def _retryable(exc: BaseException) -> bool:
-    s = str(exc)
-
+    s = str(exc).lower()
+    # 代理没开 / DNS 失败 / 网络不可达：重试只会让人多等三十秒
+    if any(k in s for k in _NO_RETRY_MARKERS):
+        return False
+    if isinstance(exc, _NET_ERRORS):
+        return True
     return any(
         k in s
-        for k in ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "500", "INTERNAL")
+        for k in ("429", "resource_exhausted", "503", "unavailable", "500", "internal")
     )
 
 
@@ -751,6 +836,7 @@ def _backoff(attempt: int, base: float, cap: float) -> float:
 
 def _generate(client: Any, model: str, contents: Any, config: Any) -> Any:
     """带退避重试的非流式调用。"""
+    preflight_network()
     attempts, base, cap = _retry_cfg()
     for i in range(attempts):
         try:
@@ -776,6 +862,7 @@ def _open_stream(
     client: Any, model: str, contents: Any, config: Any
 ) -> Tuple[Any, Any]:
     """建立上游流并预取首帧：限流在这里重试，硬错误在响应头之前抛出。"""
+    preflight_network()
     attempts, base, cap = _retry_cfg()
     for i in range(attempts):
         try:
@@ -886,9 +973,16 @@ def _err(message: str, status: int = 500, etype: str = "proxy_error") -> JSONRes
 
 def _upstream_msg(exc: Exception, model: str) -> str:
     """把 SDK 异常翻译成对客户端有用的提示。"""
+    if isinstance(exc, UpstreamUnreachable):
+        return "[网络不可达] %s" % exc
     text = "%s: %s" % (type(exc).__name__, exc)
     s = str(exc)
-    if "NOT_FOUND" in s or "was not found" in s:
+    if isinstance(exc, _NET_ERRORS) or any(k in s.lower() for k in _NO_RETRY_MARKERS):
+        text += (
+            " | 提示：本机到 Google 的连接不通或被打断（Clash/VPN 未开、节点失效、"
+            "或本机无网络）。检查网络后重试；这类错误已自动重试过，不必反复手动重发"
+        )
+    elif "NOT_FOUND" in s or "was not found" in s:
         text += " | 提示：project/location 下找不到模型 %s，当前环境可用模型为 %s" % (
             model,
             ", ".join(MODELS),
@@ -934,9 +1028,16 @@ def _chunk_obj(
 
 
 def _claude_err(exc: Exception) -> str:
+    if isinstance(exc, UpstreamUnreachable):
+        return "[网络不可达] %s" % exc
     s = str(exc)
     text = "Claude: " + s
-    if "429" in s or "RESOURCE_EXHAUSTED" in s:
+    if isinstance(exc, _NET_ERRORS) or any(k in s.lower() for k in _NO_RETRY_MARKERS):
+        text += (
+            " | 提示：本机到 Google 的连接不通或被打断（Clash/VPN 未开、节点失效、"
+            "或本机无网络）"
+        )
+    elif "429" in s or "RESOURCE_EXHAUSTED" in s:
         text += (
             " | 提示：该 Claude 模型的在线预测配额为 0。去控制台 IAM→配额，"
             "按 base model `anthropic-claude-*` 申请提额后再试"
