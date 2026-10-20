@@ -643,8 +643,18 @@ def _usage(resp: Any) -> Dict[str, int]:
     um = getattr(resp, "usage_metadata", None)
     p = int(getattr(um, "prompt_token_count", 0) or 0)
     c = int(getattr(um, "candidates_token_count", 0) or 0)
-    t = int(getattr(um, "total_token_count", 0) or 0) or (p + c)
-    return {"prompt_tokens": p, "completion_tokens": c, "total_tokens": t}
+    th = int(getattr(um, "thoughts_token_count", 0) or 0)
+    t = int(getattr(um, "total_token_count", 0) or 0) or (p + c + th)
+    # Google 按「含思考」的 token 计费，而 candidates_token_count 不含思考。
+    # 用 total - prompt 兜准，保证账本与出账口径一致（同时兼容 OpenAI 的
+    # completion_tokens 语义：推理模型的 reasoning tokens 本就计入 completion）。
+    billed_out = max(c + th, t - p if t >= p else 0)
+    return {
+        "prompt_tokens": p,
+        "completion_tokens": billed_out,
+        "thoughts_token_count": th,
+        "total_tokens": p + billed_out,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -1224,13 +1234,23 @@ def _stats_html(data: Dict[str, Any]) -> str:
     today = data.get("today") or {}
     limits = today.get("limits") or {}
     rows = "".join(
-        "<tr><td>{d}</td><td>{r}</td><td>{t:,}</td><td>{f}</td></tr>".format(
+        "<tr><td>{d}</td><td>{r}</td><td>{t:,}</td><td>{f}</td><td>${c:.4f}</td></tr>".format(
             d=x.get("date", ""),
             r=x.get("requests", 0),
             t=int(x.get("tokens", 0)),
             f=x.get("fail", 0),
+            c=float(x.get("cost") or 0),
         )
         for x in data.get("daily", [])
+    )
+    missing = data.get("missing_prices") or []
+    note = "；".join(
+        x
+        for x in [
+            data.get("prices_note") or "",
+            ("未配置价格: " + ", ".join(missing)) if missing else "",
+        ]
+        if x
     )
     by_model = "".join(
         "<li>{} <b>{}</b></li>".format(k, v)
@@ -1251,11 +1271,15 @@ def _stats_html(data: Dict[str, Any]) -> str:
 <div class="card">
   <span class="k">今日请求</span> <span class="v">REQ</span> &nbsp;&nbsp;
   <span class="k">今日 tokens</span> <span class="v">TOK</span> &nbsp;&nbsp;
-  <span class="k">失败</span> <span class="v">FAIL</span>
+  <span class="k">失败</span> <span class="v">FAIL</span> &nbsp;&nbsp;
+  <span class="k">今日估算</span> <span class="v">$COST</span>
   <ul>MODELS</ul>
 </div>
-<table><tr><th>日期</th><th>请求</th><th>tokens</th><th>失败</th></tr>ROWS</table>
-""".replace("MODELS", by_model or "<li style='color:#8b93a7'>暂无</li>")
+<table><tr><th>日期</th><th>请求</th><th>tokens</th><th>失败</th><th>估算 $</th></tr>ROWS</table>
+<div class="sub" style="margin-top:14px">NOTE</div>
+""".replace("COST", "{:.4f}".format(float(today.get("cost") or 0)))
+        .replace("NOTE", note)
+        .replace("MODELS", by_model or "<li style='color:#8b93a7'>暂无</li>")
         .replace("DTOK", "{:,}".format(int(limits.get("daily_tokens", 0) or 0)))
         .replace("DREQ", str(limits.get("daily_requests", "-")))
         .replace("DATE", str(today.get("date", "")))
@@ -1364,8 +1388,16 @@ async def chat_completions(req: ChatRequest, request: Request):
     # ---------------- 非流式 ----------------
     if not stream:
         try:
-            resp = generate_with_bridge(
-                client, model, contents, config, bridge_enabled, bridge_rounds
+            # 必须丢线程池：这是同步阻塞调用，直接在 async 路由里跑会把事件循环
+            # 锁死 —— 一个慢请求就能让 /healthz、其他请求全部无响应
+            resp = await run_in_threadpool(
+                generate_with_bridge,
+                client,
+                model,
+                contents,
+                config,
+                bridge_enabled,
+                bridge_rounds,
             )
             text = san.restore(resp.text or "") or ""
             tool_calls = extract_tool_calls(resp)
@@ -1409,6 +1441,7 @@ async def chat_completions(req: ChatRequest, request: Request):
                 int((time.time() - t0) * 1000),
                 ok=True,
                 tools=len(tool_calls),
+                thoughts=u["thoughts_token_count"],
             )
             return JSONResponse(payload)
         except Exception as exc:

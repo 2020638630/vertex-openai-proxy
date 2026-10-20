@@ -47,6 +47,51 @@ def _today() -> str:
     return date.today().isoformat()
 
 
+# --------------------------------------------------------------------------
+# 价格表（可选，只用于估算花费，不参与拦截）
+# --------------------------------------------------------------------------
+def _price_path() -> str:
+    return os.getenv("PRICES_FILE") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "prices.json"
+    )
+
+
+def load_prices() -> Dict[str, Dict[str, float]]:
+    try:
+        with open(_price_path(), encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    out: Dict[str, Dict[str, float]] = {}
+    for model, val in raw.items():
+        if model.startswith("_") or not isinstance(val, dict):
+            continue
+        try:
+            pin = float(val["in"])
+            pout = float(val["out"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out[model] = {"in": pin, "out": pout}
+    return out
+
+
+def prices_note() -> str:
+    try:
+        with open(_price_path(), encoding="utf-8") as f:
+            return str((json.load(f) or {}).get("_note") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def cost_of(
+    prices: Dict[str, Dict[str, float]], model: str, tin: int, tout: int
+) -> Optional[float]:
+    p = prices.get(model)
+    if not p:
+        return None
+    return tin / 1e6 * p["in"] + tout / 1e6 * p["out"]
+
+
 def _seconds_to_midnight() -> int:
     now = datetime.now()
     tomorrow = datetime.combine(now.date() + timedelta(days=1), datetime.min.time())
@@ -134,6 +179,7 @@ class Usage:
         tools: int = 0,
         provider: str = "gemini",
         error: str = "",
+        thoughts: int = 0,
     ) -> None:
         rec = {
             "ts": datetime.now().strftime("%H:%M:%S"),
@@ -141,6 +187,7 @@ class Usage:
             "provider": provider,
             "in": int(in_tokens or 0),
             "out": int(out_tokens or 0),
+            "th": int(thoughts or 0),
             "ms": int(ms or 0),
             "ok": bool(ok),
             "tools": int(tools or 0),
@@ -216,43 +263,70 @@ class Usage:
 
     def stats(self, days: int = 7) -> Dict[str, Any]:
         today = date.today()
-        out: Dict[str, Any] = {"today": self.snapshot(), "daily": [], "errors": []}
-        total = Counter()
+        prices = load_prices()
+        out: Dict[str, Any] = {
+            "today": {},
+            "daily": [],
+            "errors": [],
+            "prices_note": prices_note(),
+        }
+        missing: set = set()
+        total = {"requests": 0, "tokens": 0, "fail": 0, "cost": 0.0}
+
         for i in range(max(1, days)):
             d = today - timedelta(days=i)
             path = self._path(d.isoformat())
-            row = {"date": d.isoformat(), "requests": 0, "tokens": 0, "fail": 0}
-            if not os.path.exists(path):
-                if i == 0:
-                    row.update(self.snapshot())
-                out["daily"].append(row)
-                continue
-            try:
-                with open(path, encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        rec = json.loads(line)
-                        row["requests"] += 1
-                        row["tokens"] += int(rec.get("in") or 0) + int(
-                            rec.get("out") or 0
-                        )
-                        if not rec.get("ok", True):
-                            row["fail"] += 1
-                            if len(out["errors"]) < 10:
-                                out["errors"].append(
-                                    {
-                                        "date": d.isoformat(),
-                                        "ts": rec.get("ts"),
-                                        "model": rec.get("model"),
-                                        "err": rec.get("err", ""),
-                                    }
-                                )
-            except Exception:
-                pass
+            row: Dict[str, Any] = {
+                "date": d.isoformat(),
+                "requests": 0,
+                "tokens": 0,
+                "fail": 0,
+                "cost": 0.0,
+            }
+            if os.path.exists(path):
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            rec = json.loads(line)
+                            tin = int(rec.get("in") or 0)
+                            tout = int(rec.get("out") or 0)
+                            row["requests"] += 1
+                            row["tokens"] += tin + tout
+                            if not rec.get("ok", True):
+                                row["fail"] += 1
+                                if len(out["errors"]) < 10:
+                                    out["errors"].append(
+                                        {
+                                            "date": d.isoformat(),
+                                            "ts": rec.get("ts"),
+                                            "model": rec.get("model"),
+                                            "err": rec.get("err", ""),
+                                        }
+                                    )
+                            model = str(rec.get("model") or "")
+                            c = cost_of(prices, model, tin, tout)
+                            if c is None:
+                                if model:
+                                    missing.add(model)
+                            else:
+                                row["cost"] += c
+                except Exception:
+                    pass
+
+            row["cost"] = round(row["cost"], 4)
+            if i == 0:
+                snap = self.snapshot()
+                snap["cost"] = row["cost"]
+                out["today"] = snap
             for k in ("requests", "tokens", "fail"):
                 total[k] += row[k]
+            total["cost"] += row["cost"]
             out["daily"].append(row)
-        out["total"] = dict(total)
+
+        total["cost"] = round(total["cost"], 4)
+        out["total"] = total
+        out["missing_prices"] = sorted(missing)
         return out
