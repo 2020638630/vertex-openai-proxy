@@ -788,13 +788,16 @@ def preflight_network(force: bool = False) -> None:
     if ep:
         if not _tcp_ok(*ep):
             raise UpstreamUnreachable(
-                "本地代理 %s:%d 连不上 —— Clash / VPN 可能没启动，或换了端口。"
-                "开启后再发一次即可（这种情况重试没有意义，已直接返回）" % ep
+                "Clash/VPN 的代理端口 %s:%d 连不上 —— 请先开启 Clash，"
+                "或把 .env 里的 VERTEX_PROXY 改成实际端口"
+                "（换节点/重开客户端后端口可能变）。这类错误重试没有意义，已直接返回"
+                % ep
             )
     elif not _tcp_ok("aiplatform.googleapis.com", 443, 3.0):
         raise UpstreamUnreachable(
-            "本机连不上 Google（aiplatform.googleapis.com:443）—— "
-            "可能没联网，或需要开启代理 / VPN。检查网络后再试"
+            "本机连不上 Google（aiplatform.googleapis.com:443）—— 可能没联网；"
+            "若在国内，还需要在 .env 里配置 VERTEX_PROXY 指向 Clash"
+            "（如 http://127.0.0.1:7897）"
         )
     _pf_until = now + 10
 
