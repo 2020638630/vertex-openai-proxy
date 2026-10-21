@@ -65,6 +65,22 @@ OpenAI / 本地 Ollama / 自建中转站。一个实现覆盖全部，配置驱�
 }
 ```
 
+### 预置的 provider
+
+| provider | base_url | Key 环境变量 | 备注 |
+| --- | --- | --- | --- |
+| `ollama` | `http://127.0.0.1:11434/v1` | （无需） | 本地，成本 0 |
+| `deepseek` | `https://api.deepseek.com/v1` | `DEEPSEEK_API_KEY` | 已实测 |
+| `glm` | `https://open.bigmodel.cn/api/paas/v4` | `GLM_API_KEY` | 智谱，有免费档 |
+| `siliconflow` | `https://api.siliconflow.cn/v1` | `SILICONFLOW_API_KEY` | 注册送额度 |
+| `groq` | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` | 免费额度 |
+| `grok` | `https://api.x.ai/v1` | `XAI_API_KEY` | 需充值 |
+| `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | 需充值 |
+| `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | 一个 key 多家，有 `:free` |
+| `relay` | 自填 | `RELAY_API_KEY` | 自建中转，空则跳过 |
+
+只填你有 key 的那几个，其余留空 —— `base_url` 或 key 为空的 provider 不会被使用。
+
 ### 路由规则（混合，先精确后兜底）
 
 | 写法 | 结果 |

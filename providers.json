@@ -26,6 +26,18 @@
     "models": []
   },
 
+  "siliconflow": {
+    "base_url": "https://api.siliconflow.cn/v1",
+    "api_key_env": "SILICONFLOW_API_KEY",
+    "models": []
+  },
+
+  "groq": {
+    "base_url": "https://api.groq.com/openai/v1",
+    "api_key_env": "GROQ_API_KEY",
+    "models": []
+  },
+
   "grok": {
     "base_url": "https://api.x.ai/v1",
     "api_key_env": "XAI_API_KEY",
@@ -35,6 +47,13 @@
   "openai": {
     "base_url": "https://api.openai.com/v1",
     "api_key_env": "OPENAI_API_KEY",
+    "models": []
+  },
+
+  "openrouter": {
+    "base_url": "https://openrouter.ai/api/v1",
+    "api_key_env": "OPENROUTER_API_KEY",
+    "headers": { "HTTP-Referer": "http://localhost", "X-Title": "local-proxy" },
     "models": []
   },
 
