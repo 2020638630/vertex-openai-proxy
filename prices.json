@@ -1,15 +1,32 @@
 {
-  "_note": "美元 / 百万 token。Gemini 取自本机结算价目表（2026-10-21，Default 模式）；DeepSeek 取自官方定价页（2026-10-21），此处按【高峰】价填写，非高峰为其 50%，故估算偏保守偏高。deepseek-chat / deepseek-reasoner 为已下线旧名，官方会重定向到 V4 系列，这里按 flash / v4-pro 近似计价以便历史账本可读。cached_in 为该家的缓存命中单价，未配置时按 in × (1 - _cache_discount) 计。",
+  "_note": "全部折算为美元 / 百万 token。来源与口径：Gemini 取本机结算价目表（2026-10-21，Default 档）；DeepSeek 取官方定价页（2026-10-21，按【高峰】价，非高峰半价）；智谱取官方文档 docs.bigmodel.cn/cn/guide/start/pricing（2026-10-16 更新，人民币）；硅基流动取 www.siliconflow.cn/pricing（人民币，DeepSeek-V4.1-Flash 按常规时段价）；Groq 的 gpt-oss-20b 为 0.075/0.30（第三方核实 2026-10）。OpenRouter 的 `:free` 模型统一按 0 计（代码里按后缀判定，无需逐条登记）。智谱 GLM-4.5/4.6 纯文本版官方价目表已不再列出，故未配置。",
   "_cache_discount": 0.9,
+  "_fx": { "CNY": 7.1 },
+
   "gemini-4-argon": { "in": 4.0, "out": 20.0 },
   "gemini-3.8-flash": { "in": 0.75, "out": 3.75 },
   "gemini-2.5-pro": { "in": 1.25, "out": 10.0 },
   "gemini-2.5-flash": { "in": 0.3, "out": 2.5 },
   "gemini-2.5-flash-lite": { "in": 0.1, "out": 0.4 },
+
   "deepseek/deepseek-flash": { "in": 0.3, "out": 1.2, "cached_in": 0.006 },
   "deepseek/deepseek-v4-pro": { "in": 1.32, "out": 3.96, "cached_in": 0.044 },
   "deepseek/deepseek-chat": { "in": 0.3, "out": 1.2, "cached_in": 0.006 },
   "deepseek/deepseek-reasoner": { "in": 1.32, "out": 3.96, "cached_in": 0.044 },
+
+  "glm/glm-4.5-air": { "in": 0.8, "out": 6, "cached_in": 0.16, "currency": "CNY" },
+  "glm/glm-4.7": { "in": 2, "out": 8, "cached_in": 0.4, "currency": "CNY" },
+  "glm/glm-5": { "in": 4, "out": 18, "cached_in": 1, "currency": "CNY" },
+  "glm/glm-5-turbo": { "in": 5, "out": 22, "cached_in": 1.2, "currency": "CNY" },
+  "glm/glm-4.7-flash": { "in": 0, "out": 0, "currency": "CNY" },
+
+  "siliconflow/deepseek-ai/DeepSeek-V4.1-Flash": { "in": 2, "out": 8, "cached_in": 0.04, "currency": "CNY" },
+  "siliconflow/zai-org/GLM-5.3-Flash": { "in": 0.8, "out": 2.8, "cached_in": 0.23, "currency": "CNY" },
+  "siliconflow/zai-org/GLM-5.3": { "in": 8, "out": 28, "cached_in": 2, "currency": "CNY" },
+  "siliconflow/meituan-longcat/LongCat-2.0": { "in": 5, "out": 20, "cached_in": 0.1, "currency": "CNY" },
+
+  "groq/openai/gpt-oss-20b": { "in": 0.075, "out": 0.3 },
+
   "ollama/qwen2.5:7b": { "in": 0.0, "out": 0.0 },
   "ollama/qwen2.5:7b-fast": { "in": 0.0, "out": 0.0 },
   "ollama/qwen2.5vl:7b": { "in": 0.0, "out": 0.0 }

@@ -79,9 +79,22 @@ def cache_discount() -> float:
         return 0.9
 
 
+def _fx_rates(raw: Dict[str, Any]) -> Dict[str, float]:
+    """读取 _fx 汇率表，统一折算成 USD（各家官网有的用人民币报价）。"""
+    rates = {"USD": 1.0}
+    for cur, val in (raw.get("_fx") or {}).items():
+        try:
+            rates[str(cur).upper()] = float(val)
+        except (TypeError, ValueError):
+            continue
+    return rates
+
+
 def load_prices() -> Dict[str, Dict[str, float]]:
+    raw = _read_price_file_raw()
+    fx = _fx_rates(raw)
     out: Dict[str, Dict[str, float]] = {}
-    for model, val in _read_price_file_raw().items():
+    for model, val in raw.items():
         if model.startswith("_") or not isinstance(val, dict):
             continue
         try:
@@ -89,12 +102,13 @@ def load_prices() -> Dict[str, Dict[str, float]]:
             pout = float(val["out"])
         except (KeyError, TypeError, ValueError):
             continue
-        entry = {"in": pin, "out": pout}
+        rate = fx.get(str(val.get("currency") or "USD").upper(), 1.0) or 1.0
+        entry = {"in": pin / rate, "out": pout / rate}
         # 可选：缓存命中单价。各家折扣不同（Gemini 约 1 折，DeepSeek 约 2%~3%），
         # 没配就退回 in × (1 - _cache_discount)
         try:
             if val.get("cached_in") is not None:
-                entry["cached_in"] = float(val["cached_in"])
+                entry["cached_in"] = float(val["cached_in"]) / rate
         except (TypeError, ValueError):
             pass
         out[model] = entry
@@ -114,6 +128,8 @@ def cost_of(
     discount: float = 0.9,
 ) -> Optional[float]:
     """估算花费。cached 为命中缓存的输入 token（按 discount 打折）。"""
+    if model.endswith(":free"):  # OpenRouter 的免费模型，无需在价格表里逐个登记
+        return 0.0
     p = prices.get(model)
     if not p:
         return None

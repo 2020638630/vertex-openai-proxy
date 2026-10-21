@@ -3,7 +3,7 @@
 
   "_routing_example": [
     "ollama/qwen2.5:7b      → provider=ollama, 上游模型=qwen2.5:7b",
-    "deepseek-flash         → 命中 deepseek 的 models 列表",
+    "glm-4.5-air            → 命中 glm 的 models 列表，直接用短名",
     "relay/任意模型名        → 走自建中转，模型名原样透传"
   ],
 
@@ -23,38 +23,57 @@
   "glm": {
     "base_url": "https://open.bigmodel.cn/api/paas/v4",
     "api_key_env": "GLM_API_KEY",
-    "models": []
+    "models": [
+      "glm-4.7-flash",
+      "glm-4.5-air",
+      "glm-4.5",
+      "glm-4.6",
+      "glm-4.7",
+      "glm-5",
+      "glm-5-turbo"
+    ]
   },
 
   "siliconflow": {
     "base_url": "https://api.siliconflow.cn/v1",
     "api_key_env": "SILICONFLOW_API_KEY",
-    "models": []
+    "models": [
+      "deepseek-ai/DeepSeek-V4.1-Flash",
+      "zai-org/GLM-5.3-Flash",
+      "zai-org/GLM-5.3",
+      "meituan-longcat/LongCat-2.0"
+    ]
   },
 
   "groq": {
     "base_url": "https://api.groq.com/openai/v1",
     "api_key_env": "GROQ_API_KEY",
-    "models": []
+    "models": ["openai/gpt-oss-20b", "allam-2-7b"]
   },
 
   "grok": {
     "base_url": "https://api.x.ai/v1",
     "api_key_env": "XAI_API_KEY",
-    "models": []
+    "models": [],
+    "_status": "2026-10-21 实测 403：新 team 无 credits，需充值后才可调用"
   },
 
   "openai": {
     "base_url": "https://api.openai.com/v1",
     "api_key_env": "OPENAI_API_KEY",
-    "models": []
+    "models": ["gpt-5-nano"],
+    "_status": "2026-10-21 实测 429 insufficient_quota：账号余额为 0，需充值"
   },
 
   "openrouter": {
     "base_url": "https://openrouter.ai/api/v1",
     "api_key_env": "OPENROUTER_API_KEY",
     "headers": { "HTTP-Referer": "http://localhost", "X-Title": "local-proxy" },
-    "models": []
+    "models": [
+      "minimax/minimax-m3.1-flash:free",
+      "xingchen-agi/xing4.0-29b-a4b:free",
+      "deepseek/deepseek-v4.1-flash-1017"
+    ]
   },
 
   "relay": {

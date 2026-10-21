@@ -107,3 +107,28 @@ def test_load_prices_keeps_explicit_cached_price(tmp_path, monkeypatch):
     assert cost_of(
         p, "m", 1_000_000, 0, cached=1_000_000, discount=0.9
     ) == pytest.approx(0.02)
+
+
+def test_cny_price_is_converted_to_usd(tmp_path, monkeypatch):
+    f = tmp_path / "p.json"
+    f.write_text(
+        json.dumps(
+            {
+                "_fx": {"CNY": 7.1},
+                "cn": {"in": 7.1, "out": 14.2, "cached_in": 0.71, "currency": "CNY"},
+                "us": {"in": 1.0, "out": 2.0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PRICES_FILE", str(f))
+    p = load_prices()
+    assert p["cn"]["in"] == pytest.approx(1.0)
+    assert p["cn"]["out"] == pytest.approx(2.0)
+    assert p["cn"]["cached_in"] == pytest.approx(0.1)
+    assert p["us"]["in"] == 1.0  # 未标币种按美元
+
+
+def test_openrouter_free_suffix_is_zero_cost():
+    prices = {"whatever": {"in": 1.0, "out": 2.0}}
+    assert cost_of(prices, "minimax/x:free", 1_000_000, 1_000_000) == 0.0
