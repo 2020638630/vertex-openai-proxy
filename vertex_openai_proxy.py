@@ -717,6 +717,8 @@ MODEL_META: Dict[str, Dict[str, int]] = {
     "gemini-2.5-pro": {"context_window": 1048576, "max_output_tokens": 65536},
     "gemini-2.5-flash": {"context_window": 1048576, "max_output_tokens": 65536},
     "gemini-2.5-flash-lite": {"context_window": 1048576, "max_output_tokens": 65536},
+    # 实测：999999 会返回 "supported range is from 1 to 65537 (exclusive)"
+    "gemini-3.8-flash": {"max_output_tokens": 65536},
     # 通用通道：数值来自各家 /models 接口
     "deepseek/deepseek-flash": {"context_window": 1048576, "max_output_tokens": 393216},
     "deepseek/deepseek-v4-pro": {
@@ -753,6 +755,23 @@ MODEL_META: Dict[str, Dict[str, int]] = {
     "ollama/qwen2.5:7b-fast": {"context_window": 32768},
     "ollama/qwen2.5vl:7b": {"context_window": 128000},
 }
+
+
+def clamp_output_tokens(value: Any, model: str) -> Any:
+    """把客户端的 max_tokens 压到模型支持的上限内。
+
+    客户端常按「上下文长度」填输出上限（例如给 3.8-flash 填 128000），
+    而上游只接受 1~65536，会直接 400。这里按 MODEL_META 静默截断并记日志。
+    """
+    cap = (MODEL_META.get(model) or {}).get("max_output_tokens")
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return value
+    if cap and n > cap:
+        log.warning("max_tokens=%s 超过 %s 的输出上限 %s，已截断", n, model, cap)
+        return cap
+    return n
 
 
 def normalize_model(name: Optional[str]) -> str:
@@ -1223,6 +1242,8 @@ async def _compat_completions(
 ):
     provider, upstream_model, cfg = routed
     payload = compat.build_payload(body, upstream_model)
+    if payload.get("max_tokens") is not None:
+        payload["max_tokens"] = clamp_output_tokens(payload["max_tokens"], model)
     cid = "chatcmpl-" + uuid.uuid4().hex[:24]
     created = int(time.time())
     t0 = time.time()
@@ -1701,7 +1722,7 @@ async def chat_completions(req: ChatRequest, request: Request):
         cfg["top_p"] = float(body["top_p"])
     max_tokens = body.get("max_tokens") or body.get("max_completion_tokens")
     if max_tokens:
-        cfg["max_output_tokens"] = int(max_tokens)
+        cfg["max_output_tokens"] = int(clamp_output_tokens(max_tokens, model))
     stop = body.get("stop")
     if isinstance(stop, str):
         cfg["stop_sequences"] = [stop]

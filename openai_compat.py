@@ -128,6 +128,14 @@ def build_payload(body: Dict[str, Any], upstream_model: str) -> Dict[str, Any]:
         if body.get(key) is not None:
             payload[key] = body[key]
     payload["model"] = upstream_model
+
+    # 有些客户端同时发 max_tokens 和 max_completion_tokens，Gemini 等上游会直接 400
+    # （"max_tokens and max_completion_tokens cannot both be set"）。统一只保留一个。
+    if payload.get("max_completion_tokens") is not None:
+        if payload.get("max_tokens") is None:
+            payload["max_tokens"] = payload["max_completion_tokens"]
+        payload.pop("max_completion_tokens", None)
+
     if body.get("stream"):
         payload["stream"] = True
         payload["stream_options"] = {"include_usage": True}
@@ -181,11 +189,24 @@ def _client(url: str) -> httpx.Client:
 # --------------------------------------------------------------------------
 # 调用
 # --------------------------------------------------------------------------
+def _check(r: Any) -> None:
+    """把上游错误体带出来：默认的 raise_for_status 只有状态码，排查时看不到原因。"""
+    if r.status_code < 400:
+        return
+    try:
+        detail = r.text[:500]
+    except Exception:
+        detail = ""
+    raise httpx.HTTPStatusError(
+        "HTTP %d: %s" % (r.status_code, detail), request=r.request, response=r
+    )
+
+
 def post_json(cfg: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     url = _url(cfg)
     with _client(url) as c:
         r = c.post(url, json=payload, headers=_headers(cfg))
-    r.raise_for_status()
+    _check(r)
     return r.json()
 
 
@@ -196,7 +217,7 @@ def iter_chunks(
     url = _url(cfg)
     with _client(url) as c:
         with c.stream("POST", url, json=payload, headers=_headers(cfg)) as r:
-            r.raise_for_status()
+            _check(r)
             for line in r.iter_lines():
                 line = (line or "").strip()
                 if not line or not line.startswith("data:"):
