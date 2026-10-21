@@ -9,6 +9,9 @@ import pytest
 os.environ["LOG_TO_FILE"] = "0"
 os.environ["PREFLIGHT"] = "0"
 os.environ["USAGE_DIR"] = tempfile.mkdtemp(prefix="proxy-usage-test-")
+os.environ["SIG_CACHE_FILE"] = os.path.join(
+    tempfile.mkdtemp(prefix="proxy-sig-test-"), "sig.jsonl"
+)
 
 # 让 tests/ 能 import 到项目根目录下的代理模块
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

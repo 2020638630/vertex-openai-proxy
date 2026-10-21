@@ -151,16 +151,92 @@ MODEL_ALIASES = {
 # 注意：进程重启后缓存丢失，历史里带旧 tool_call 的会话会 400，重新开对话即可。
 # --------------------------------------------------------------------------
 _SIG_CACHE: "OrderedDict[str, Any]" = OrderedDict()
-_SIG_CACHE_MAX = 800
+_SIG_CACHE_MAX = 2000
+_SIG_FILE = os.getenv("SIG_CACHE_FILE") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "sig-cache.jsonl"
+)
+_sig_writes = 0
+
+
+def _dump_part(part: Any) -> Dict[str, Any]:
+    """Part -> 可 JSON 化的 dict（bytes 签名转 base64）。"""
+    data = part.model_dump(exclude_none=True)
+    sig = data.pop("thought_signature", None)
+    if isinstance(sig, (bytes, bytearray)):
+        data["__sig_b64"] = base64.b64encode(sig).decode()
+    return data
+
+
+def _load_part(data: Dict[str, Any]) -> Any:
+    sig = data.pop("__sig_b64", None)
+    part = types.Part.model_validate(data)
+    if sig:
+        try:
+            part.thought_signature = base64.b64decode(sig)
+        except Exception:
+            pass
+    return part
+
+
+def _load_sig_cache() -> None:
+    """启动时把上次进程写下的签名读回来，避免重启后旧会话续聊 400。"""
+    try:
+        if not os.path.exists(_SIG_FILE):
+            return
+        with open(_SIG_FILE, encoding="utf-8") as f:
+            lines = f.readlines()[-_SIG_CACHE_MAX:]
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                _SIG_CACHE[rec["id"]] = _load_part(rec["part"])
+            except Exception:
+                continue
+        log.info("已恢复 %d 条工具调用签名缓存", len(_SIG_CACHE))
+    except Exception as exc:
+        log.warning("恢复签名缓存失败: %s", exc)
 
 
 def _remember_part(call_id: str, part: Any) -> None:
+    global _sig_writes
     if not call_id or part is None:
         return
     _SIG_CACHE[call_id] = part
     _SIG_CACHE.move_to_end(call_id)
     while len(_SIG_CACHE) > _SIG_CACHE_MAX:
         _SIG_CACHE.popitem(last=False)
+    # 落盘：重启后 3.8-flash / 4-argon 的旧对话才还能续
+    try:
+        os.makedirs(os.path.dirname(_SIG_FILE), exist_ok=True)
+        with open(_SIG_FILE, "a", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {"id": call_id, "part": _dump_part(part)}, ensure_ascii=False
+                )
+                + "\n"
+            )
+        _sig_writes += 1
+        if _sig_writes % 500 == 0:  # 定期截断，避免无限增长
+            _compact_sig_file()
+    except Exception as exc:
+        log.warning("写入签名缓存失败: %s", exc)
+
+
+def _compact_sig_file() -> None:
+    try:
+        with open(_SIG_FILE, encoding="utf-8") as f:
+            lines = f.readlines()[-_SIG_CACHE_MAX:]
+        tmp = _SIG_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+        os.replace(tmp, _SIG_FILE)
+    except Exception:
+        pass
+
+
+_load_sig_cache()
 
 
 app = FastAPI(title="Vertex AI OpenAI-Compatible Proxy", version="1.0.0")
@@ -444,6 +520,7 @@ def build_contents(
         tool_calls = msg.get("tool_calls") or []
         if role == "assistant" and tool_calls:
             call_parts: List[types.Part] = list(parts)
+            missed_sig = 0
             for tc in tool_calls:
                 fn = tc.get("function") or {}
                 fname = fn.get("name")
@@ -460,6 +537,7 @@ def build_contents(
                     # 用当初下发的原始 part，把 thought_signature 一并还原
                     call_parts.append(cached)
                 else:
+                    missed_sig += 1
                     call_parts.append(
                         types.Part(
                             function_call=types.FunctionCall(name=fname, args=fargs)
@@ -467,6 +545,11 @@ def build_contents(
                     )
                 if tc.get("id"):
                     call_id_to_name[str(tc["id"])] = fname
+            if missed_sig:
+                log.warning(
+                    "%d 个历史工具调用找不到签名缓存（代理重启前的旧会话），上游可能 400",
+                    missed_sig,
+                )
             if call_parts:
                 contents.append(types.Content(role="model", parts=call_parts))
                 call_order = []
