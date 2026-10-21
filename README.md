@@ -1,6 +1,12 @@
 # vertex-openai-proxy
 
+[![CI](https://github.com/2020638630/vertex-openai-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/2020638630/vertex-openai-proxy/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 本地 **OpenAI 兼容网关**：把标准 `/v1/chat/completions` 请求经官方 `google-genai` SDK 转发到 **Vertex AI**（Gemini），让只支持 OpenAI 协议的本地 Agent（如 ZCode）可以直接用 Vertex 额度。
+
+> **定位**：个人自用项目，围绕「本地可控 + 成本可观测」打磨 —— 密钥不出本机、出站脱敏、
+> 每次调用花了多少可查。欢迎参考和借鉴，但不承诺生产可用性。
 
 ```
 ZCode ──OpenAI 协议──▶ 127.0.0.1:4000 ──google-genai──▶ Vertex AI (Gemini)
