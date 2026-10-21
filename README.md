@@ -270,9 +270,25 @@ Agent 真实负载因前缀更稳定，命中率通常更高。
 
 ```
 GET /stats                 今日 + 近 7 日，JSON
-GET /stats?format=html     一屏页面（浏览器直接打开）
+GET /stats?format=html     服务端拼的简易一屏页面
+GET /dashboard             自定义可视化面板（读取 web/dashboard.html）
 GET /healthz               存活探针 + 当前限额模式
 ```
+
+## 可视化面板
+
+`/dashboard` 托管 `web/dashboard.html`（单文件、无外部依赖、纯前端 `fetch('/stats?days=7')`）。
+
+页面内包含：今日花费 / tokens / 请求数（含成功率）/ 缓存命中率四张卡片、限额水位条
+（超限标红并显示超出量）、近 7 日趋势（可切换 Tokens / 请求数 / 成本）、模型分布（带百分比）、
+最近错误日志，以及 60 秒自动刷新。
+
+要换成自己的页面，直接覆盖 `web/dashboard.html` 即可，代理无需重启（每次请求现读）。
+文件不存在时 `/dashboard` 返回 404 和一句提示，不影响其他接口。
+
+> 该页面是用 `gemini-3.8-flash` 出视觉、`deepseek-flash` 做功能增补的：
+> 前者负责布局与配色，后者只在原 CSS 上做加法（18 个 CSS 变量、31 个元素 id 零改动）。
+> 验收脚本见 `docs/bench/`（本地目录，不入库）。
 
 ## 日志
 
@@ -308,6 +324,9 @@ python -m pytest        # 15 个用例，约 1 秒，零网络、不需要 Key
 | `429 RESOURCE_EXHAUSTED` | 配额/速率用尽 | 等 30~60 秒；或改用 flash；Claude 需先申请配额 |
 | `missing a thought_signature` | 代理重启导致签名缓存丢失 | 新建对话；或改用 2.5 系列 |
 | `404 NOT_FOUND ... publishers/.../models/X` | 模型 ID 不存在或区域不对 | Gemini 用 `location=global`；Claude 也仅 global |
+| `maxOutputTokens ... supported range is from 1 to 65537` | 客户端把 `max_tokens` 按"上下文长度"填超了（如 128000） | 代理已按 `MODEL_META` 自动截断并记 WARNING；建议客户端也改到 65536 以内 |
+| `max_tokens and max_completion_tokens cannot both be set` | 客户端同时发了这两个字段 | 代理已去重（保留 `max_tokens`）；无需处理 |
+| `Function call is missing a thought_signature`（aistudio/*） | 走了 OpenAI 兼容层 | 已改为原生通道，**重启代理后生效** |
 
 > 网络类错误现在会**先预检再决定要不要重试**：代理端口不通、DNS 失败这类直接返回，
 > 不会让你干等 30 秒。链路抖动（超时/连接被重置）才走 5s→10s→20s 重试。

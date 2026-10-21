@@ -193,10 +193,18 @@ def _check(r: Any) -> None:
     """把上游错误体带出来：默认的 raise_for_status 只有状态码，排查时看不到原因。"""
     if r.status_code < 400:
         return
+    detail = ""
     try:
-        detail = r.text[:500]
+        # 流式响应必须先 read()，直接取 .text 会是空串
+        raw = r.read()
+        detail = (
+            raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+        )[:500]
     except Exception:
-        detail = ""
+        try:
+            detail = r.text[:500]
+        except Exception:
+            detail = "(无法读取响应体)"
     raise httpx.HTTPStatusError(
         "HTTP %d: %s" % (r.status_code, detail), request=r.request, response=r
     )

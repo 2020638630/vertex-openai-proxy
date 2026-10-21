@@ -1,0 +1,1086 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本地代理网关用量监控</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #090d16;
+    --panel: #111726;
+    --panel-hover: #151d30;
+    --border: #1e293b;
+    --border-light: #2d3b55;
+    --text: #f1f5f9;
+    --text-muted: #94a3b8;
+    --text-dim: #64748b;
+    --cyan: #06b6d4;
+    --cyan-glow: rgba(6, 182, 212, 0.15);
+    --blue: #3b82f6;
+    --indigo: #6366f1;
+    --emerald: #10b981;
+    --amber: #f59e0b;
+    --rose: #f43f5e;
+    --mono: ui-monospace, "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+    --sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1.5;
+    min-height: 100vh;
+    padding: 16px 20px;
+  }
+
+  .container {
+    max-width: 1400px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  /* 顶部导航与状态条 */
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 18px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .logo-badge {
+    width: 32px;
+    height: 32px;
+    background: linear-gradient(135deg, #0ea5e9, #6366f1);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 16px var(--cyan-glow);
+  }
+  .logo-badge svg { width: 18px; height: 18px; stroke: #fff; fill: none; stroke-width: 2.2; }
+  .title-group h1 {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .title-group p {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .mode-pill {
+    font-size: 10px;
+    font-family: var(--mono);
+    text-transform: uppercase;
+    padding: 1px 7px;
+    border-radius: 4px;
+    background: #1e293b;
+    color: var(--cyan);
+    border: 1px solid var(--border-light);
+  }
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-family: var(--mono);
+    padding: 4px 10px;
+    border-radius: 20px;
+    background: #0d1424;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-dim);
+  }
+  .status-dot.online { background: var(--emerald); box-shadow: 0 0 8px var(--emerald); }
+  .status-dot.error { background: var(--rose); box-shadow: 0 0 8px var(--rose); }
+  .status-dot.loading { background: var(--amber); animation: pulse 1s infinite alternate; }
+  @keyframes pulse { from { opacity: 0.4; } to { opacity: 1; } }
+
+  .btn-refresh {
+    background: #182236;
+    border: 1px solid var(--border-light);
+    color: var(--text);
+    padding: 5px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.15s ease;
+  }
+  .btn-refresh:hover { background: #22304d; border-color: var(--cyan); }
+  .btn-refresh svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+  /* 降级与错误提示 Banner */
+  .alert-banner {
+    display: none;
+    background: #2a1215;
+    border: 1px solid #7f1d1d;
+    color: #fca5a5;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 12px;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .alert-banner.show { display: flex; }
+  .alert-btn {
+    background: #7f1d1d;
+    color: #fff;
+    border: none;
+    padding: 3px 9px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+
+  /* 顶部四大 KPI 卡片 */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .kpi-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.15s;
+  }
+  .kpi-card:hover { border-color: var(--border-light); }
+  .kpi-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 2px;
+    background: var(--accent-color, var(--cyan));
+  }
+  .kpi-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .kpi-value {
+    font-size: 25px;
+    font-weight: 700;
+    font-family: var(--mono);
+    letter-spacing: -0.5px;
+    color: var(--text);
+  }
+  .kpi-sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 5px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  /* 水位与限额条 */
+  .limits-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 18px;
+  }
+  .limits-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .limits-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .limits-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .limit-item { display: flex; flex-direction: column; gap: 5px; }
+  .limit-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+  }
+  .limit-name { color: var(--text-muted); }
+  .limit-stat { font-family: var(--mono); color: var(--text); }
+  .progress-bg {
+    height: 7px;
+    background: #182236;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 4px;
+    background: var(--cyan);
+    transition: width 0.4s ease, background 0.3s;
+  }
+
+  /* 趋势图表区 */
+  .chart-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+  }
+  .chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .chart-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .tab-group {
+    display: flex;
+    background: #0d1424;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px;
+  }
+  .tab-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 3px 10px;
+    font-size: 11px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--sans);
+    transition: all 0.15s;
+  }
+  .tab-btn.active {
+    background: #1e293b;
+    color: var(--cyan);
+    font-weight: 600;
+  }
+  .canvas-wrapper {
+    position: relative;
+    width: 100%;
+    height: 220px;
+  }
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .chart-tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 11px;
+    font-family: var(--mono);
+    color: var(--text);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    display: none;
+    z-index: 10;
+    white-space: nowrap;
+    transform: translate(-50%, -120%);
+  }
+
+  /* 底部双栏：模型分布 + 错误日志 */
+  .bottom-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .sub-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    min-height: 250px;
+  }
+  .sub-panel-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .sub-panel-title span {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--text-dim);
+  }
+
+  /* 模型分布条目 */
+  .model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    max-height: 210px;
+    padding-right: 4px;
+  }
+  .model-list::-webkit-scrollbar { width: 4px; }
+  .model-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .model-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .model-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+  }
+  .model-name {
+    font-family: var(--mono);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .model-stats {
+    font-family: var(--mono);
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .model-bar-bg {
+    height: 5px;
+    background: #182236;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .model-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--cyan), var(--indigo));
+  }
+
+  /* 错误日志 */
+  .error-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    max-height: 210px;
+    padding-right: 4px;
+  }
+  .error-list::-webkit-scrollbar { width: 4px; }
+  .error-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .error-item {
+    background: #161b29;
+    border: 1px solid #281d24;
+    border-left: 3px solid var(--rose);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .error-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .error-tag {
+    font-family: var(--mono);
+    color: #fca5a5;
+    background: rgba(244, 63, 94, 0.15);
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+  .error-time {
+    color: var(--text-dim);
+    font-family: var(--mono);
+  }
+  .error-msg {
+    color: var(--text-muted);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    line-height: 1.4;
+    word-break: break-all;
+    max-height: 48px;
+    overflow: hidden;
+  }
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 160px;
+    color: var(--text-dim);
+    gap: 8px;
+  }
+  .empty-state svg { width: 28px; height: 28px; stroke: var(--emerald); fill: none; stroke-width: 1.8; }
+
+  /* 页脚：更新时间与自动刷新 */
+  .footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 4px 4px;
+    font-size: 11px;
+    font-family: var(--mono);
+    color: var(--text-dim);
+  }
+  .footer-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .auto-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--emerald);
+    opacity: 0.75;
+  }
+
+  /* 响应式适配 */
+  @media (max-width: 1024px) {
+    .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    .limits-grid { grid-template-columns: 1fr; }
+    .bottom-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <!-- 顶部导航 -->
+  <header class="header">
+    <div class="brand">
+      <div class="logo-badge">
+        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      </div>
+      <div class="title-group">
+        <h1>本地代理网关用量监控 <span class="mode-pill" id="gw-mode">BLOCK</span></h1>
+        <p>本地模型网关实时状态 · 端口 4000</p>
+      </div>
+    </div>
+    <div class="controls">
+      <div class="status-badge">
+        <span class="status-dot online" id="status-dot"></span>
+        <span id="status-text">实时连接</span>
+      </div>
+      <button class="btn-refresh" id="btn-refresh" onclick="fetchData()">
+        <svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        刷新
+      </button>
+    </div>
+  </header>
+
+  <!-- 降级提示 Banner -->
+  <div class="alert-banner" id="alert-banner">
+    <span id="alert-msg">数据加载异常，未能成功连接本地网关接口。已展示预备骨架。</span>
+    <button class="alert-btn" onclick="fetchData()">重试连接</button>
+  </div>
+
+  <!-- KPI 四大核心指标 -->
+  <div class="kpi-grid">
+    <!-- 今日估算花费 -->
+    <div class="kpi-card" style="--accent-color: var(--amber);">
+      <div class="kpi-label">
+        <span>今日估算花费</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v12M16 10H9.5a2.5 2.5 0 0 0 0 5H14"/></svg>
+      </div>
+      <div class="kpi-value" id="kpi-cost">$0.00</div>
+      <div class="kpi-sub" id="kpi-cost-sub">近7日累计: $0.00</div>
+    </div>
+
+    <!-- 今日 Tokens 总量 -->
+    <div class="kpi-card" style="--accent-color: var(--cyan);">
+      <div class="kpi-label">
+        <span>今日 Tokens 总量</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+      </div>
+      <div class="kpi-value" id="kpi-tokens">0</div>
+      <div class="kpi-sub" id="kpi-tokens-sub">入: 0 · 出: 0</div>
+    </div>
+
+    <!-- 今日请求数 -->
+    <div class="kpi-card" style="--accent-color: var(--blue);">
+      <div class="kpi-label">
+        <span>今日请求数</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      </div>
+      <div class="kpi-value" id="kpi-reqs">0</div>
+      <div class="kpi-sub" id="kpi-reqs-sub">失败: 0 次 · 成功率: 100.0%</div>
+    </div>
+
+    <!-- 缓存命中率 -->
+    <div class="kpi-card" style="--accent-color: var(--emerald);">
+      <div class="kpi-label">
+        <span>缓存命中率</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+      </div>
+      <div class="kpi-value" id="kpi-cache">0.0%</div>
+      <div class="kpi-sub" id="kpi-cache-sub">已省: 0 tokens</div>
+    </div>
+  </div>
+
+  <!-- 限额水位看板 -->
+  <div class="limits-panel">
+    <div class="limits-head">
+      <span class="limits-title">今日额度与限流水位</span>
+      <span style="font-size:11px; color:var(--text-dim);" id="limit-rpm-tag">限流保护: 30 RPM</span>
+    </div>
+    <div class="limits-grid">
+      <!-- 未命中 token / 上限 -->
+      <div class="limit-item">
+        <div class="limit-labels">
+          <span class="limit-name">未命中 Token 水位</span>
+          <span class="limit-stat" id="stat-uncached">0 / 0 (0.0%)</span>
+        </div>
+        <div class="progress-bg">
+          <div class="progress-fill" id="bar-uncached"></div>
+        </div>
+      </div>
+      <!-- 总 token / 上限 -->
+      <div class="limit-item">
+        <div class="limit-labels">
+          <span class="limit-name">总 Token 水位</span>
+          <span class="limit-stat" id="stat-tokens">0 / 0 (0.0%)</span>
+        </div>
+        <div class="progress-bg">
+          <div class="progress-fill" id="bar-tokens"></div>
+        </div>
+      </div>
+      <!-- 请求数 / 上限 -->
+      <div class="limit-item">
+        <div class="limit-labels">
+          <span class="limit-name">每日请求上限</span>
+          <span class="limit-stat" id="stat-reqs">0 / 0 (0.0%)</span>
+        </div>
+        <div class="progress-bg">
+          <div class="progress-fill" id="bar-reqs"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 趋势图表卡片 -->
+  <div class="chart-panel">
+    <div class="chart-header">
+      <div class="chart-title">近 7 日趋势分析</div>
+      <div class="tab-group">
+        <button class="tab-btn active" id="tab-tokens" onclick="switchMetric('tokens')">Tokens 趋势</button>
+        <button class="tab-btn" id="tab-requests" onclick="switchMetric('requests')">请求数走势</button>
+        <button class="tab-btn" id="tab-cost" onclick="switchMetric('cost')">成本趋势</button>
+      </div>
+    </div>
+    <div class="canvas-wrapper" id="canvas-wrapper">
+      <canvas id="trendChart"></canvas>
+      <div class="chart-tooltip" id="tooltip"></div>
+    </div>
+  </div>
+
+  <!-- 底部双栏：模型分布 + 错误日志 -->
+  <div class="bottom-grid">
+    <!-- 模型分布 -->
+    <div class="sub-panel">
+      <div class="sub-panel-title">
+        今日模型分布
+        <span id="model-count-tag">共 0 个模型</span>
+      </div>
+      <div class="model-list" id="model-list">
+        <div class="empty-state">暂无模型调用数据</div>
+      </div>
+    </div>
+
+    <!-- 最近错误 -->
+    <div class="sub-panel">
+      <div class="sub-panel-title">
+        最近错误日志
+        <span id="error-count-tag">无异常</span>
+      </div>
+      <div class="error-list" id="error-list">
+        <div class="empty-state">
+          <svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <span>今日运行顺畅，暂无错误记录</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- 页脚：更新时间与自动刷新倒计时 -->
+  <footer class="footer">
+    <span id="last-updated">更新于 --:--:--</span>
+    <span class="footer-right">
+      <span class="auto-dot"></span>
+      <span id="auto-refresh-hint">60s 后自动刷新</span>
+    </span>
+  </footer>
+</div>
+
+<script>
+  let rawData = null;
+  let activeMetric = 'tokens';
+  let chartPoints = [];
+  const AUTO_REFRESH_SECONDS = 60;
+  let countdown = AUTO_REFRESH_SECONDS;
+  let lastUpdated = null;
+  let isFetching = false;
+
+  // 工具函数：千分位格式化
+  function fmtNum(n) {
+    if (n === null || n === undefined || isNaN(n)) return '0';
+    return Number(n).toLocaleString('en-US');
+  }
+
+  // 工具函数：数值紧凑展示 (例如 5.5M)
+  function fmtCompact(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return String(n);
+  }
+
+  // 本地时间标签 HH:MM:SS
+  function nowLabel(d) {
+    const pad = n => (n < 10 ? '0' + n : '' + n);
+    return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+
+  // 页脚：更新时间 + 自动刷新倒计时
+  function renderFooter() {
+    const timeEl = document.getElementById('last-updated');
+    if (timeEl && lastUpdated) timeEl.textContent = '更新于 ' + nowLabel(lastUpdated);
+    const hintEl = document.getElementById('auto-refresh-hint');
+    if (hintEl) hintEl.textContent = countdown + 's 后自动刷新';
+  }
+
+  function resetCountdown() {
+    countdown = AUTO_REFRESH_SECONDS;
+    renderFooter();
+  }
+
+  // 额度水位：返回文案（含超限标注）与封顶后的进度百分比
+  function limitStat(val, limit) {
+    const cap = limit > 0 ? limit : 1;
+    const rawPct = (val / cap) * 100;
+    let text = fmtNum(val) + ' / ' + fmtNum(cap) + ' (' + rawPct.toFixed(1) + '%)';
+    if (val > cap) text += ' · 超出 ' + fmtNum(val - cap);
+    return { text: text, pct: Math.min(100, rawPct), raw: rawPct, over: val > cap };
+  }
+
+  // 内容未变时不重写 DOM，避免自动刷新闪烁
+  function setHTML(el, html) {
+    if (el && el.__lastHtml !== html) {
+      el.innerHTML = html;
+      el.__lastHtml = html;
+    }
+  }
+
+  // 切换趋势指标
+  function switchMetric(metric) {
+    activeMetric = metric;
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    const btn = document.getElementById('tab-' + metric);
+    if (btn) btn.classList.add('active');
+    drawChart();
+  }
+
+  // 渲染所有界面数据
+  function render(data) {
+    rawData = data;
+    const today = data.today || {};
+    const limits = today.limits || {};
+    const total = data.total || {};
+
+    // 状态标识
+    document.getElementById('gw-mode').textContent = today.mode || 'READY';
+    document.getElementById('status-dot').className = 'status-dot online';
+    document.getElementById('status-text').textContent = today.date || '已连接';
+    document.getElementById('alert-banner').classList.remove('show');
+
+    // 1. KPI：今日花费
+    const todayCost = typeof today.cost === 'number' ? today.cost : 0;
+    const totalCost = typeof total.cost === 'number' ? total.cost : todayCost;
+    document.getElementById('kpi-cost').textContent = '$' + todayCost.toFixed(todayCost >= 1 ? 4 : 4);
+    document.getElementById('kpi-cost-sub').textContent = '7日累计: $' + totalCost.toFixed(2);
+
+    // 2. KPI：今日 Tokens
+    const tokTotal = today.tokens_total || today.tokens || 0;
+    const tokIn = today.tokens_in || 0;
+    const tokOut = today.tokens_out || 0;
+    document.getElementById('kpi-tokens').textContent = fmtNum(tokTotal);
+    document.getElementById('kpi-tokens-sub').textContent = '入: ' + fmtCompact(tokIn) + ' · 出: ' + fmtCompact(tokOut);
+
+    // 3. KPI：今日请求数
+    const reqs = today.requests || 0;
+    const fails = today.fail || 0;
+    const successRatio = reqs > 0 ? (((reqs - fails) / reqs) * 100).toFixed(1) : '100.0';
+    document.getElementById('kpi-reqs').textContent = fmtNum(reqs);
+    document.getElementById('kpi-reqs-sub').textContent = '失败: ' + fails + ' 次 · 成功率: ' + successRatio + '%';
+
+    // 4. KPI：缓存命中率
+    const hitRatio = typeof today.cache_hit_ratio === 'number' ? (today.cache_hit_ratio * 100).toFixed(1) : '0.0';
+    const cachedTokens = today.tokens_cached || today.cached || 0;
+    document.getElementById('kpi-cache').textContent = hitRatio + '%';
+    document.getElementById('kpi-cache-sub').textContent = '已省: ' + fmtCompact(cachedTokens) + ' tokens';
+
+    // 5. 限额水位
+    if (limits.rpm) {
+      document.getElementById('limit-rpm-tag').textContent = '限流: ' + limits.rpm + ' RPM · 硬限额 ' + (limits.hard_multiplier || 3) + 'x';
+    }
+
+    // 未命中 Token 水位
+    const uncachedVal = today.tokens_uncached || 0;
+    const uncachedLimit = limits.daily_uncached || 1;
+    const uncachedPct = Math.min(100, (uncachedVal / uncachedLimit) * 100);
+    document.getElementById('stat-uncached').textContent = limitStat(uncachedVal, uncachedLimit).text;
+    const barUncached = document.getElementById('bar-uncached');
+    barUncached.style.width = uncachedPct + '%';
+    barUncached.style.background = uncachedPct > 90 ? 'var(--rose)' : (uncachedPct > 70 ? 'var(--amber)' : 'var(--cyan)');
+
+    // 总 Token 水位
+    const tokensVal = tokTotal;
+    const tokensLimit = limits.daily_tokens || 1;
+    const tokensPct = Math.min(100, (tokensVal / tokensLimit) * 100);
+    document.getElementById('stat-tokens').textContent = limitStat(tokensVal, tokensLimit).text;
+    const barTokens = document.getElementById('bar-tokens');
+    barTokens.style.width = tokensPct + '%';
+    barTokens.style.background = tokensPct > 90 ? 'var(--rose)' : (tokensPct > 70 ? 'var(--amber)' : 'var(--cyan)');
+
+    // 请求数水位
+    const reqLimit = limits.daily_requests || 1;
+    const reqPct = Math.min(100, (reqs / reqLimit) * 100);
+    document.getElementById('stat-reqs').textContent = limitStat(reqs, reqLimit).text;
+    const barReqs = document.getElementById('bar-reqs');
+    barReqs.style.width = reqPct + '%';
+    barReqs.style.background = reqPct > 90 ? 'var(--rose)' : (reqPct > 70 ? 'var(--amber)' : 'var(--blue)');
+
+    // 6. 今日模型分布
+    const byModel = today.by_model || {};
+    const modelEntries = Object.entries(byModel).sort((a, b) => b[1] - a[1]);
+    const modelListEl = document.getElementById('model-list');
+    document.getElementById('model-count-tag').textContent = '共 ' + modelEntries.length + ' 个活跃模型';
+
+    if (modelEntries.length === 0) {
+      setHTML(modelListEl, '<div class="empty-state">暂无模型调用数据</div>');
+    } else {
+      const maxModelReq = Math.max(...modelEntries.map(e => e[1]), 1);
+      const totalModelReq = modelEntries.reduce((acc, cur) => acc + cur[1], 0) || 1;
+      let html = '';
+      modelEntries.forEach(([name, count]) => {
+        const pctOfTotal = ((count / totalModelReq) * 100).toFixed(1);
+        const barWidth = ((count / maxModelReq) * 100).toFixed(1);
+        html += `
+          <div class="model-row">
+            <div class="model-meta">
+              <span class="model-name" title="${name}">${name}</span>
+              <span class="model-stats">${fmtNum(count)} 次 (${pctOfTotal}%)</span>
+            </div>
+            <div class="model-bar-bg">
+              <div class="model-bar-fill" style="width: ${barWidth}%"></div>
+            </div>
+          </div>
+        `;
+      });
+      setHTML(modelListEl, html);
+    }
+
+    // 7. 最近错误
+    const errors = data.errors || [];
+    const errorListEl = document.getElementById('error-list');
+    const errTag = document.getElementById('error-count-tag');
+
+    if (errors.length === 0) {
+      errTag.textContent = '无';
+      errTag.style.color = '';
+      setHTML(errorListEl, `
+        <div class="empty-state">
+          <svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <span>今日运行顺畅，无错误</span>
+        </div>
+      `);
+    } else {
+      errTag.textContent = errors.length + ' 条记录';
+      errTag.style.color = 'var(--rose)';
+      let errHtml = '';
+      errors.slice(0, 8).forEach(err => {
+        const timeStr = (err.date ? err.date + ' ' : '') + (err.ts || '');
+        const cleanMsg = (err.err || '未知错误').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        errHtml += `
+          <div class="error-item">
+            <div class="error-top">
+              <span class="error-tag">${err.model || 'gateway'}</span>
+              <span class="error-time">${timeStr}</span>
+            </div>
+            <div class="error-msg" title="${cleanMsg}">${cleanMsg}</div>
+          </div>
+        `;
+      });
+      setHTML(errorListEl, errHtml);
+    }
+
+    // 8. 绘制趋势图
+    drawChart();
+  }
+
+  // 手绘 Canvas 趋势图
+  function drawChart() {
+    const canvas = document.getElementById('trendChart');
+    if (!canvas || !rawData) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+
+    const width = rect.width;
+    const height = rect.height;
+    ctx.clearRect(0, 0, width, height);
+
+    // 提取近 7 日数据并倒序排序（从早到晚）
+    let dailyList = (rawData.daily || []).slice().reverse();
+    if (dailyList.length === 0) {
+      ctx.fillStyle = '#64748b';
+      ctx.font = '12px ' + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign = 'center';
+      ctx.fillText('近 7 日暂无趋势数据', width / 2, height / 2);
+      return;
+    }
+
+    const padding = { top: 25, right: 30, bottom: 35, left: 55 };
+    const chartW = width - padding.left - padding.right;
+    const chartH = height - padding.top - padding.bottom;
+
+    // 获取当前指标数值
+    const getVal = item => {
+      if (activeMetric === 'tokens') return item.tokens || 0;
+      if (activeMetric === 'requests') return item.requests || 0;
+      if (activeMetric === 'cost') return item.cost || 0;
+      return 0;
+    };
+
+    const maxVal = Math.max(...dailyList.map(getVal), 1);
+    const niceMax = maxVal === 1 ? 10 : Math.ceil(maxVal * 1.15);
+
+    // 绘制横向网格线与 Y 轴刻度
+    const gridRows = 4;
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 1;
+    ctx.font = '10px var(--mono)';
+    ctx.fillStyle = '#64748b';
+    ctx.textAlign = 'right';
+
+    for (let i = 0; i <= gridRows; i++) {
+      const y = padding.top + (chartH / gridRows) * i;
+      const v = niceMax * (1 - i / gridRows);
+
+      ctx.beginPath();
+      ctx.moveTo(padding.left, y);
+      ctx.lineTo(width - padding.right, y);
+      ctx.stroke();
+
+      let label = '';
+      if (activeMetric === 'cost') label = '$' + v.toFixed(v >= 10 ? 1 : 2);
+      else if (activeMetric === 'tokens') label = fmtCompact(v);
+      else label = fmtNum(Math.round(v));
+
+      ctx.fillText(label, padding.left - 8, y + 3);
+    }
+
+    // 计算各点坐标与柱子
+    chartPoints = [];
+    const stepX = chartW / Math.max(dailyList.length - 1, 1);
+    const barWidth = Math.min(36, (chartW / dailyList.length) * 0.45);
+
+    dailyList.forEach((d, i) => {
+      const x = dailyList.length === 1 ? padding.left + chartW / 2 : padding.left + i * stepX;
+      const val = getVal(d);
+      const y = padding.top + chartH - (val / niceMax) * chartH;
+      chartPoints.push({ x, y, data: d, val, date: d.date });
+    });
+
+    // 1. 绘制背景柱状图
+    dailyList.forEach((d, i) => {
+      const pt = chartPoints[i];
+      const barH = padding.top + chartH - pt.y;
+      const bx = pt.x - barWidth / 2;
+      const by = pt.y;
+
+      const grad = ctx.createLinearGradient(0, by, 0, padding.top + chartH);
+      grad.addColorStop(0, 'rgba(6, 182, 212, 0.4)');
+      grad.addColorStop(1, 'rgba(6, 182, 212, 0.03)');
+
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(bx, by, barWidth, Math.max(barH, 2), [4, 4, 0, 0]) : ctx.rect(bx, by, barWidth, Math.max(barH, 2));
+      ctx.fill();
+
+      // X 轴日期刻度
+      ctx.fillStyle = '#94a3b8';
+      ctx.textAlign = 'center';
+      const shortDate = d.date ? d.date.slice(5) : ('Day ' + (i + 1));
+      ctx.fillText(shortDate, pt.x, height - 12);
+    });
+
+    // 2. 绘制连续趋势折线
+    if (chartPoints.length > 1) {
+      ctx.beginPath();
+      ctx.strokeStyle = '#06b6d4';
+      ctx.lineWidth = 2.5;
+      chartPoints.forEach((pt, i) => {
+        if (i === 0) ctx.moveTo(pt.x, pt.y);
+        else ctx.lineTo(pt.x, pt.y);
+      });
+      ctx.stroke();
+
+      // 折线节点圆点
+      chartPoints.forEach(pt => {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#090d16';
+        ctx.fill();
+        ctx.strokeStyle = '#06b6d4';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      });
+    }
+  }
+
+  // 悬停交互与 Tooltip
+  const canvasWrapper = document.getElementById('canvas-wrapper');
+  const tooltip = document.getElementById('tooltip');
+
+  canvasWrapper.addEventListener('mousemove', e => {
+    if (!chartPoints || chartPoints.length === 0) return;
+    const rect = canvasWrapper.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+
+    let closest = chartPoints[0];
+    let minDiff = Math.abs(mouseX - closest.x);
+    for (let i = 1; i < chartPoints.length; i++) {
+      const diff = Math.abs(mouseX - chartPoints[i].x);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closest = chartPoints[i];
+      }
+    }
+
+    if (closest && minDiff < 45) {
+      tooltip.style.display = 'block';
+      tooltip.style.left = closest.x + 'px';
+      tooltip.style.top = (closest.y - 10) + 'px';
+
+      const d = closest.data;
+      tooltip.innerHTML = `
+        <div style="font-weight:600; color:#38bdf8; margin-bottom:3px;">${d.date}</div>
+        <div>Tokens: <b>${fmtNum(d.tokens)}</b></div>
+        <div>请求: <b>${fmtNum(d.requests)} 次</b> (失败: ${d.fail || 0})</div>
+        <div>花费: <b>$${Number(d.cost || 0).toFixed(4)}</b></div>
+        <div>缓存: <b>${fmtNum(d.cached || 0)}</b></div>
+      `;
+    } else {
+      tooltip.style.display = 'none';
+    }
+  });
+
+  canvasWrapper.addEventListener('mouseleave', () => {
+    tooltip.style.display = 'none';
+  });
+
+  window.addEventListener('resize', () => {
+    if (rawData) drawChart();
+  });
+
+  // 核心取数逻辑与兜底异常处理
+  function fetchData(options) {
+    if (isFetching) return;
+    isFetching = true;
+    resetCountdown();
+
+    // 自动刷新走静默模式：不切换状态点、不出现整页闪烁
+    const silent = !!(options && options.auto);
+    const dot = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+    if (!silent) {
+      dot.className = 'status-dot loading';
+      statusText.textContent = '同步中...';
+    }
+
+    fetch('/stats?days=7')
+      .then(response => {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.json();
+      })
+      .then(data => {
+        render(data);
+        lastUpdated = new Date();
+        renderFooter();
+        isFetching = false;
+      })
+      .catch(err => {
+        isFetching = false;
+        // 优雅降级：报错不白屏，显示错误 Banner
+        dot.className = 'status-dot error';
+        statusText.textContent = '连接中断';
+        const banner = document.getElementById('alert-banner');
+        document.getElementById('alert-msg').textContent = '无法获取网关监控数据：' + err.message + '。请检查本地 127.0.0.1:4000 网关进程是否正常。';
+        banner.classList.add('show');
+      });
+  }
+
+  // 页面就绪自动拉取
+  document.addEventListener('DOMContentLoaded', fetchData);
+
+  // 每 60 秒静默刷新一次；页面隐藏时暂停计时，手动刷新由 fetchData 重置
+  setInterval(() => {
+    if (document.hidden) return;
+    countdown -= 1;
+    if (countdown <= 0) {
+      countdown = AUTO_REFRESH_SECONDS;
+      renderFooter();
+      fetchData({ auto: true });
+      return;
+    }
+    renderFooter();
+  }, 1000);
+</script>
+</body>
+</html>
