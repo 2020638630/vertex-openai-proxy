@@ -89,7 +89,15 @@ def load_prices() -> Dict[str, Dict[str, float]]:
             pout = float(val["out"])
         except (KeyError, TypeError, ValueError):
             continue
-        out[model] = {"in": pin, "out": pout}
+        entry = {"in": pin, "out": pout}
+        # 可选：缓存命中单价。各家折扣不同（Gemini 约 1 折，DeepSeek 约 2%~3%），
+        # 没配就退回 in × (1 - _cache_discount)
+        try:
+            if val.get("cached_in") is not None:
+                entry["cached_in"] = float(val["cached_in"])
+        except (TypeError, ValueError):
+            pass
+        out[model] = entry
     return out
 
 
@@ -111,9 +119,10 @@ def cost_of(
         return None
     cached = max(0, min(int(cached or 0), int(tin or 0)))
     uncached = max(0, int(tin or 0) - cached)
+    cached_unit = p.get("cached_in", p["in"] * (1 - discount))
     return (
         uncached / 1e6 * p["in"]
-        + cached / 1e6 * p["in"] * (1 - discount)
+        + cached / 1e6 * cached_unit
         + int(tout or 0) / 1e6 * p["out"]
     )
 

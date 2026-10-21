@@ -3,7 +3,7 @@
 
   "_routing_example": [
     "ollama/qwen2.5:7b      → provider=ollama, 上游模型=qwen2.5:7b",
-    "deepseek-chat          → 命中 deepseek 的 models 列表",
+    "deepseek-flash         → 命中 deepseek 的 models 列表",
     "relay/任意模型名        → 走自建中转，模型名原样透传"
   ],
 
@@ -16,7 +16,8 @@
   "deepseek": {
     "base_url": "https://api.deepseek.com/v1",
     "api_key_env": "DEEPSEEK_API_KEY",
-    "models": ["deepseek-chat", "deepseek-reasoner"]
+    "models": ["deepseek-flash", "deepseek-v4-pro"],
+    "_legacy": "deepseek-chat / deepseek-reasoner 仍可调，但官方已改为重定向到 V4 系列并按新模型计费"
   },
 
   "glm": {

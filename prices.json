@@ -1,11 +1,13 @@
 {
-  "_note": "来源：本机结算账号价目表（2026-10-21 导出，Default 模式）。美元 / 百万 token。缓存命中按 _cache_discount 折扣计（官方隐式缓存 90% off）。Claude 不在该价目表内；Ollama 本地推理为 0 成本；DeepSeek 等请按官方价目自行补充。",
+  "_note": "美元 / 百万 token。Gemini 取自本机结算价目表（2026-10-21，Default 模式）；DeepSeek 取自官方定价页（2026-10-21），此处按【高峰】价填写，非高峰为其 50%，故估算偏保守偏高。cached_in 为该家的缓存命中单价，未配置时按 in × (1 - _cache_discount) 计。",
   "_cache_discount": 0.9,
   "gemini-4-argon": { "in": 4.0, "out": 20.0 },
   "gemini-3.8-flash": { "in": 0.75, "out": 3.75 },
   "gemini-2.5-pro": { "in": 1.25, "out": 10.0 },
   "gemini-2.5-flash": { "in": 0.3, "out": 2.5 },
   "gemini-2.5-flash-lite": { "in": 0.1, "out": 0.4 },
+  "deepseek/deepseek-flash": { "in": 0.3, "out": 1.2, "cached_in": 0.006 },
+  "deepseek/deepseek-v4-pro": { "in": 1.32, "out": 3.96, "cached_in": 0.044 },
   "ollama/qwen2.5:7b": { "in": 0.0, "out": 0.0 },
   "ollama/qwen2.5:7b-fast": { "in": 0.0, "out": 0.0 },
   "ollama/qwen2.5vl:7b": { "in": 0.0, "out": 0.0 }

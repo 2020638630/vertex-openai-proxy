@@ -93,3 +93,17 @@ def test_usage_counts_thinking_tokens_as_output():
     assert u["thoughts_token_count"] == 90
     assert u["cached_tokens"] == 60
     assert u["total_tokens"] == 200
+
+
+def test_load_prices_keeps_explicit_cached_price(tmp_path, monkeypatch):
+    f = tmp_path / "p.json"
+    f.write_text(
+        json.dumps({"m": {"in": 1.0, "out": 2.0, "cached_in": 0.02}}), encoding="utf-8"
+    )
+    monkeypatch.setenv("PRICES_FILE", str(f))
+    p = load_prices()
+    assert p["m"]["cached_in"] == 0.02
+    # 命中价显式给出时，用它而不是 in*(1-discount)
+    assert cost_of(
+        p, "m", 1_000_000, 0, cached=1_000_000, discount=0.9
+    ) == pytest.approx(0.02)
