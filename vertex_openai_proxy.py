@@ -51,6 +51,11 @@ try:  # anthropic 是可选依赖：没装也不影响 Gemini 链路
 except Exception:  # pragma: no cover
     claude_adapter = None  # type: ignore[assignment]
 
+try:
+    import openai_compat as compat
+except Exception:  # pragma: no cover
+    compat = None  # type: ignore[assignment]
+
 # 日志固定 UTF-8 输出，避免 Windows 下重定向到文件时按 GBK 写坏中文
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -1142,6 +1147,163 @@ def _upstream_msg(exc: Exception, model: str) -> str:
 # 路由
 # --------------------------------------------------------------------------
 # --------------------------------------------------------------------------
+# 通用 OpenAI 兼容通道
+# --------------------------------------------------------------------------
+def _compat_err(exc: Exception, provider: str, cfg: Dict[str, Any]) -> str:
+    base = cfg.get("base_url") or ""
+    text = "%s(%s): %s" % (provider, base, exc)
+    s = str(exc)
+    if isinstance(exc, httpx.ConnectError):
+        text += (
+            " | 提示：连不上 %s —— 本地服务（如 Ollama）是否启动？base_url 是否正确？"
+            % base
+        )
+    elif "401" in s or "403" in s:
+        text += " | 提示：API Key 缺失或无效（环境变量 %s）" % (
+            cfg.get("api_key_env") or "-"
+        )
+    elif "404" in s:
+        text += " | 提示：模型不存在，或 base_url 少了 /v1；可用模型见 providers.json"
+    elif "429" in s:
+        text += " | 提示：上游限流或余额不足"
+    return text
+
+
+async def _compat_completions(
+    body: Dict[str, Any],
+    san: Sanitizer,
+    model: str,
+    routed: Any,
+    stream: bool,
+):
+    provider, upstream_model, cfg = routed
+    payload = compat.build_payload(body, upstream_model)
+    cid = "chatcmpl-" + uuid.uuid4().hex[:24]
+    created = int(time.time())
+    t0 = time.time()
+
+    # ---------------- 非流式 ----------------
+    if not stream:
+        try:
+            data = await run_in_threadpool(compat.post_json, cfg, payload)
+        except Exception as exc:
+            log.exception("compat 非流式失败")
+            USAGE.record(
+                model,
+                ms=int((time.time() - t0) * 1000),
+                ok=False,
+                error=str(exc),
+                provider=provider,
+            )
+            return _err(_compat_err(exc, provider, cfg), 502, "upstream_error")
+
+        tools = 0
+        for ch in data.get("choices") or []:
+            msg = ch.get("message") or {}
+            if msg.get("content"):
+                msg["content"] = san.restore(msg["content"])
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                if fn.get("arguments"):
+                    fn["arguments"] = san.restore(fn["arguments"])
+                tools += 1
+        data["model"] = model
+        u = compat.map_usage(data.get("usage"))
+        log.info(
+            "POST stream=False provider=%s model=%s->%s in=%d cache=%d out=%d tools=%d",
+            provider,
+            model,
+            upstream_model,
+            u["in"],
+            u["cached"],
+            u["out"],
+            tools,
+        )
+        USAGE.record(
+            model,
+            u["in"],
+            u["out"],
+            int((time.time() - t0) * 1000),
+            ok=True,
+            tools=tools,
+            provider=provider,
+            cached=u["cached"],
+        )
+        return JSONResponse(data)
+
+    # ---------------- 流式 ----------------
+    gen = compat.iter_chunks(cfg, payload)
+    try:
+        first = await run_in_threadpool(next, gen, None)
+    except Exception as exc:
+        log.exception("compat 建流失败")
+        return _err(_compat_err(exc, provider, cfg), 502, "upstream_error")
+
+    def event_stream():
+        restorer = StreamRestorer(san)
+        usage = {"in": 0, "out": 0, "cached": 0}
+        finish = None
+        try:
+            chunks = itertools.chain([first], gen) if first is not None else gen
+            for chunk in chunks:
+                if not isinstance(chunk, dict):
+                    continue
+                if chunk.get("usage"):
+                    usage = compat.map_usage(chunk["usage"])
+                for choice in chunk.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    if delta.get("content"):
+                        delta["content"] = restorer.feed(delta["content"])
+                    for tc in delta.get("tool_calls") or []:
+                        fn = tc.get("function") or {}
+                        if fn.get("arguments"):
+                            fn["arguments"] = san.restore(fn["arguments"])
+                    if choice.get("finish_reason"):
+                        finish = choice["finish_reason"]
+                chunk["model"] = model
+                yield _sse(chunk)
+            tail = restorer.flush()
+            if tail:
+                yield _sse(_chunk_obj(cid, created, model, {"content": tail}))
+            yield "data: [DONE]\n\n"
+            log.info(
+                "POST stream=True provider=%s model=%s->%s in=%d cache=%d out=%d",
+                provider,
+                model,
+                upstream_model,
+                usage["in"],
+                usage["cached"],
+                usage["out"],
+            )
+            USAGE.record(
+                model,
+                usage["in"],
+                usage["out"],
+                int((time.time() - t0) * 1000),
+                ok=True,
+                provider=provider,
+                cached=usage["cached"],
+            )
+        except Exception as exc:
+            log.exception("compat 流式失败")
+            USAGE.record(
+                model,
+                ms=int((time.time() - t0) * 1000),
+                ok=False,
+                error=str(exc),
+                provider=provider,
+            )
+            yield _sse({"error": {"message": _compat_err(exc, provider, cfg)}})
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# --------------------------------------------------------------------------
 # Claude（AnthropicVertex）分支
 # --------------------------------------------------------------------------
 def _sse(obj: Any) -> str:
@@ -1307,13 +1469,25 @@ def root() -> Dict[str, Any]:
 @app.get("/v1/models")
 def list_models() -> Dict[str, Any]:
     now = int(time.time())
-    return {
-        "object": "list",
-        "data": [
-            {"id": m, "object": "model", "created": now, "owned_by": "google"}
-            for m in MODELS
-        ],
-    }
+    data = [
+        {"id": m, "object": "model", "created": now, "owned_by": "google"}
+        for m in MODELS
+    ]
+    # 通用通道里配置的模型，统一以 provider/model 形式暴露，客户端可直接选
+    if compat:
+        for name, cfg in compat.load_providers().items():
+            if not (cfg.get("base_url") or "").strip():
+                continue
+            for m in cfg.get("models") or []:
+                data.append(
+                    {
+                        "id": "%s/%s" % (name, m),
+                        "object": "model",
+                        "created": now,
+                        "owned_by": name,
+                    }
+                )
+    return {"object": "list", "data": data}
 
 
 @app.get("/v1/models/{model_id}")
@@ -1432,6 +1606,11 @@ async def chat_completions(req: ChatRequest, request: Request):
     # claude-* 走 AnthropicVertex 分支（Gemini 与 Claude 结构不兼容，必须分开转换）
     if model.lower().startswith("claude"):
         return await _claude_completions(body, san, model, stream)
+
+    # 通用 OpenAI 兼容通道（DeepSeek / GLM / Grok / OpenAI / Ollama / 中转站）
+    routed = compat.resolve(model) if compat else None
+    if routed:
+        return await _compat_completions(body, san, model, routed, stream)
 
     system, contents = build_contents(body.get("messages") or [])
 

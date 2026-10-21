@@ -50,6 +50,54 @@ python vertex_openai_proxy.py
 
 服务账号模式需要该账号有 `roles/aiplatform.user`，密钥文件不要入库（已在 `.gitignore`）。
 
+## 多 provider：通用 OpenAI 兼容通道
+
+除了 Vertex Gemini，还能把请求转发到**任何 OpenAI 兼容服务**：DeepSeek / 智谱 GLM / xAI Grok /
+OpenAI / 本地 Ollama / 自建中转站。一个实现覆盖全部，配置驱动，新增一家不用改代码。
+
+配置文件 `providers.json`（改完无需重启）：
+
+```json
+{
+  "ollama":   { "base_url": "http://127.0.0.1:11434/v1", "api_key_env": "", "models": ["qwen2.5:7b"] },
+  "deepseek": { "base_url": "https://api.deepseek.com/v1", "api_key_env": "DEEPSEEK_API_KEY",
+                "models": ["deepseek-chat", "deepseek-reasoner"] }
+}
+```
+
+### 路由规则（混合，先精确后兜底）
+
+| 写法 | 结果 |
+| --- | --- |
+| `ollama/qwen2.5:7b` | 前缀命中 → provider=ollama，上游只收 `qwen2.5:7b` |
+| `deepseek-chat` | 前缀未命中 → 查各 provider 的 `models` 列表 → deepseek |
+| `gemini-3.8-flash` | 都没命中 → 走 Vertex Gemini 通道 |
+| `relay/任意名字` | 中转站，模型名原样透传 |
+
+`base_url` 为空 = 该 provider 未启用，不会被劫持。
+
+### 本地优先：Ollama
+
+```powershell
+ollama serve                        # 默认 11434
+curl http://127.0.0.1:4000/v1/models  # 会列出 ollama/qwen2.5:7b 等
+```
+
+本地模型**不走代理**（代码里对 `127.0.0.1` 自动跳过 `VERTEX_PROXY`），成本为 0
+（`prices.json` 里配成 0，`/stats` 会显示 $0）。
+
+实测（qwen2.5:7b，本机 CPU）：非流式 9.9s、流式 3.3s、工具调用 2.1s。
+
+### usage 字段归一
+
+各家命名不同，统一映射后才算得准账：
+
+| 来源 | 输入 | 输出 | 缓存命中 |
+| --- | --- | --- | --- |
+| OpenAI 风格 | `prompt_tokens` | `completion_tokens` | `prompt_tokens_details.cached_tokens` |
+| DeepSeek | `prompt_tokens` | `completion_tokens` | `prompt_cache_hit_tokens` |
+| Anthropic 风格 | `input_tokens` | `output_tokens` | `cache_read_input_tokens` |
+
 ## Claude（AnthropicVertex）
 
 `model` 以 `claude-` 开头时走独立分支，用官方 `anthropic[vertex]` SDK 转发，消息/工具双向转换由 `claude_adapter.py` 负责。

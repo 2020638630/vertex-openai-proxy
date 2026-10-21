@@ -1,0 +1,45 @@
+{
+  "_note": "通用 OpenAI 兼容通道。路由规则：优先看 model 里的 `provider/` 前缀；没有前缀则按本文件 models 列表匹配。api_key_env 填环境变量名，本地服务可留空。改完无需重启。",
+
+  "_routing_example": [
+    "ollama/qwen2.5:7b      → provider=ollama, 上游模型=qwen2.5:7b",
+    "deepseek-chat          → 命中 deepseek 的 models 列表",
+    "relay/任意模型名        → 走自建中转，模型名原样透传"
+  ],
+
+  "ollama": {
+    "base_url": "http://127.0.0.1:11434/v1",
+    "api_key_env": "",
+    "models": ["qwen2.5:7b", "qwen2.5:7b-fast", "qwen2.5vl:7b"]
+  },
+
+  "deepseek": {
+    "base_url": "https://api.deepseek.com/v1",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "models": ["deepseek-chat", "deepseek-reasoner"]
+  },
+
+  "glm": {
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    "api_key_env": "GLM_API_KEY",
+    "models": []
+  },
+
+  "grok": {
+    "base_url": "https://api.x.ai/v1",
+    "api_key_env": "XAI_API_KEY",
+    "models": []
+  },
+
+  "openai": {
+    "base_url": "https://api.openai.com/v1",
+    "api_key_env": "OPENAI_API_KEY",
+    "models": []
+  },
+
+  "relay": {
+    "base_url": "",
+    "api_key_env": "RELAY_API_KEY",
+    "models": []
+  }
+}
