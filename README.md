@@ -99,6 +99,9 @@ ollama serve                        # 默认 11434
 curl http://127.0.0.1:4000/v1/models  # 会列出 ollama/qwen2.5:7b 等
 ```
 
+`/v1/models` 对**核实过**的模型还会附带 `context_window` / `max_output_tokens`，
+客户端可用来预填上下文长度；未核实的模型（如 `gemini-4-argon`）不编造这两个字段。
+
 本地模型**不走代理**（代码里对 `127.0.0.1` 自动跳过 `VERTEX_PROXY`），成本为 0
 （`prices.json` 里配成 0，`/stats` 会显示 $0）。
 

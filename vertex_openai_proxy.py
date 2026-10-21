@@ -710,6 +710,51 @@ def extract_tool_calls(resp: Any) -> List[Dict[str, Any]]:
     return calls
 
 
+# 模型能力元数据：context_window / max_output_tokens
+# 只收「核实过」的值（官方 /models 接口或公开规格），未核实的留空，避免给客户端错误信息
+MODEL_META: Dict[str, Dict[str, int]] = {
+    # Vertex Gemini（公开规格）
+    "gemini-2.5-pro": {"context_window": 1048576, "max_output_tokens": 65536},
+    "gemini-2.5-flash": {"context_window": 1048576, "max_output_tokens": 65536},
+    "gemini-2.5-flash-lite": {"context_window": 1048576, "max_output_tokens": 65536},
+    # 通用通道：数值来自各家 /models 接口
+    "deepseek/deepseek-flash": {"context_window": 1048576, "max_output_tokens": 393216},
+    "deepseek/deepseek-v4-pro": {
+        "context_window": 1048576,
+        "max_output_tokens": 393216,
+    },
+    "aistudio/gemini-flash-latest": {
+        "context_window": 1048576,
+        "max_output_tokens": 65536,
+    },
+    "aistudio/gemini-3.1-flash-lite": {
+        "context_window": 1048576,
+        "max_output_tokens": 65536,
+    },
+    "aistudio/gemini-3-flash-preview": {
+        "context_window": 1048576,
+        "max_output_tokens": 65536,
+    },
+    "aistudio/gemini-pro-latest": {
+        "context_window": 1048576,
+        "max_output_tokens": 65536,
+    },
+    "aistudio/gemini-3.1-pro-preview": {
+        "context_window": 1048576,
+        "max_output_tokens": 65536,
+    },
+    "glm/glm-4.5-air": {"context_window": 131072},
+    "glm/glm-4.7": {"context_window": 204800},
+    "glm/glm-5": {"context_window": 204800},
+    "glm/glm-5-turbo": {"context_window": 204800},
+    "groq/openai/gpt-oss-20b": {"context_window": 131072},
+    "groq/allam-2-7b": {"context_window": 4096},
+    "ollama/qwen2.5:7b": {"context_window": 32768},
+    "ollama/qwen2.5:7b-fast": {"context_window": 32768},
+    "ollama/qwen2.5vl:7b": {"context_window": 128000},
+}
+
+
 def normalize_model(name: Optional[str]) -> str:
     name = (name or DEFAULT_MODEL).strip()
     for prefix in ("google/", "models/", "vertex_ai/", "vertex/"):
@@ -1466,27 +1511,30 @@ def root() -> Dict[str, Any]:
     }
 
 
+def _model_entry(model_id: str, owner: str, now: int) -> Dict[str, Any]:
+    entry: Dict[str, Any] = {
+        "id": model_id,
+        "object": "model",
+        "created": now,
+        "owned_by": owner,
+    }
+    meta = MODEL_META.get(model_id)
+    if meta:
+        entry.update(meta)  # 客户端可用来预填上下文长度，读不到也无害
+    return entry
+
+
 @app.get("/v1/models")
 def list_models() -> Dict[str, Any]:
     now = int(time.time())
-    data = [
-        {"id": m, "object": "model", "created": now, "owned_by": "google"}
-        for m in MODELS
-    ]
+    data = [_model_entry(m, "google", now) for m in MODELS]
     # 通用通道里配置的模型，统一以 provider/model 形式暴露，客户端可直接选
     if compat:
         for name, cfg in compat.load_providers().items():
             if not (cfg.get("base_url") or "").strip():
                 continue
             for m in cfg.get("models") or []:
-                data.append(
-                    {
-                        "id": "%s/%s" % (name, m),
-                        "object": "model",
-                        "created": now,
-                        "owned_by": name,
-                    }
-                )
+                data.append(_model_entry("%s/%s" % (name, m), name, now))
     return {"object": "list", "data": data}
 
 
@@ -1575,6 +1623,25 @@ def stats(days: int = 7, format: str = "json"):
     if (format or "").lower() == "html":
         return HTMLResponse(_stats_html(data))
     return data
+
+
+@app.get("/dashboard")
+def dashboard():
+    """托管 web/dashboard.html（自定义可视化页面，缺失时给出可读提示）。"""
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "web", "dashboard.html"
+    )
+    if not os.path.exists(path):
+        return _err(
+            "还没有自定义面板：把页面保存为 web/dashboard.html 后刷新本页即可",
+            404,
+            "not_found",
+        )
+    try:
+        with open(path, encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+    except OSError as exc:
+        return _err("读取 web/dashboard.html 失败: %s" % exc, 500, "io_error")
 
 
 @app.post("/v1/chat/completions")
