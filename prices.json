@@ -1,5 +1,6 @@
 {
-  "_note": "来源：本机结算账号价目表（2026-10-21 导出，Only Default 模式）。美元 / 百万 token。2.5 Pro/Flash 取标准档，长上下文（>200k）价格更高。Claude 未在该价目表内，故未配置。",
+  "_note": "来源：本机结算账号价目表（2026-10-21 导出，Default 模式）。美元 / 百万 token。缓存命中按 _cache_discount 折扣计（官方隐式缓存 90% off）。Claude 不在该价目表内，未配置。",
+  "_cache_discount": 0.9,
   "gemini-4-argon": { "in": 4.0, "out": 20.0 },
   "gemini-3.8-flash": { "in": 0.75, "out": 3.75 },
   "gemini-2.5-pro": { "in": 1.25, "out": 10.0 },

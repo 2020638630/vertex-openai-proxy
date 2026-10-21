@@ -56,14 +56,25 @@ def _price_path() -> str:
     )
 
 
-def load_prices() -> Dict[str, Dict[str, float]]:
+def _read_price_file_raw() -> Dict[str, Any]:
     try:
         with open(_price_path(), encoding="utf-8") as f:
-            raw = json.load(f)
+            return json.load(f) or {}
     except (OSError, ValueError):
         return {}
+
+
+def cache_discount() -> float:
+    """缓存命中的折扣（0.9 = 打一折）。官方隐式缓存默认 90% off。"""
+    try:
+        return float(_read_price_file_raw().get("_cache_discount", 0.9))
+    except (TypeError, ValueError):
+        return 0.9
+
+
+def load_prices() -> Dict[str, Dict[str, float]]:
     out: Dict[str, Dict[str, float]] = {}
-    for model, val in raw.items():
+    for model, val in _read_price_file_raw().items():
         if model.startswith("_") or not isinstance(val, dict):
             continue
         try:
@@ -76,20 +87,28 @@ def load_prices() -> Dict[str, Dict[str, float]]:
 
 
 def prices_note() -> str:
-    try:
-        with open(_price_path(), encoding="utf-8") as f:
-            return str((json.load(f) or {}).get("_note") or "")
-    except (OSError, ValueError):
-        return ""
+    return str(_read_price_file_raw().get("_note") or "")
 
 
 def cost_of(
-    prices: Dict[str, Dict[str, float]], model: str, tin: int, tout: int
+    prices: Dict[str, Dict[str, float]],
+    model: str,
+    tin: int,
+    tout: int,
+    cached: int = 0,
+    discount: float = 0.9,
 ) -> Optional[float]:
+    """估算花费。cached 为命中缓存的输入 token（按 discount 打折）。"""
     p = prices.get(model)
     if not p:
         return None
-    return tin / 1e6 * p["in"] + tout / 1e6 * p["out"]
+    cached = max(0, min(int(cached or 0), int(tin or 0)))
+    uncached = max(0, int(tin or 0) - cached)
+    return (
+        uncached / 1e6 * p["in"]
+        + cached / 1e6 * p["in"] * (1 - discount)
+        + int(tout or 0) / 1e6 * p["out"]
+    )
 
 
 def _seconds_to_midnight() -> int:
@@ -180,6 +199,7 @@ class Usage:
         provider: str = "gemini",
         error: str = "",
         thoughts: int = 0,
+        cached: int = 0,
     ) -> None:
         rec = {
             "ts": datetime.now().strftime("%H:%M:%S"),
@@ -188,6 +208,7 @@ class Usage:
             "in": int(in_tokens or 0),
             "out": int(out_tokens or 0),
             "th": int(thoughts or 0),
+            "cache": int(cached or 0),
             "ms": int(ms or 0),
             "ok": bool(ok),
             "tools": int(tools or 0),
@@ -264,6 +285,7 @@ class Usage:
     def stats(self, days: int = 7) -> Dict[str, Any]:
         today = date.today()
         prices = load_prices()
+        discount = cache_discount()
         out: Dict[str, Any] = {
             "today": {},
             "daily": [],
@@ -271,7 +293,7 @@ class Usage:
             "prices_note": prices_note(),
         }
         missing: set = set()
-        total = {"requests": 0, "tokens": 0, "fail": 0, "cost": 0.0}
+        total = {"requests": 0, "tokens": 0, "fail": 0, "cost": 0.0, "cached": 0}
 
         for i in range(max(1, days)):
             d = today - timedelta(days=i)
@@ -282,6 +304,7 @@ class Usage:
                 "tokens": 0,
                 "fail": 0,
                 "cost": 0.0,
+                "cached": 0,
             }
             if os.path.exists(path):
                 try:
@@ -307,7 +330,9 @@ class Usage:
                                         }
                                     )
                             model = str(rec.get("model") or "")
-                            c = cost_of(prices, model, tin, tout)
+                            hit = int(rec.get("cache") or 0)
+                            row["cached"] = row.get("cached", 0) + hit
+                            c = cost_of(prices, model, tin, tout, hit, discount)
                             if c is None:
                                 if model:
                                     missing.add(model)
@@ -320,8 +345,11 @@ class Usage:
             if i == 0:
                 snap = self.snapshot()
                 snap["cost"] = row["cost"]
+                snap["cached"] = row["cached"]
+                tin = int(snap.get("tokens_in") or 0)
+                snap["cache_hit_ratio"] = round(row["cached"] / tin, 4) if tin else 0.0
                 out["today"] = snap
-            for k in ("requests", "tokens", "fail"):
+            for k in ("requests", "tokens", "fail", "cached"):
                 total[k] += row[k]
             total["cost"] += row["cost"]
             out["daily"].append(row)

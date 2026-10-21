@@ -649,10 +649,13 @@ def _usage(resp: Any) -> Dict[str, int]:
     # 用 total - prompt 兜准，保证账本与出账口径一致（同时兼容 OpenAI 的
     # completion_tokens 语义：推理模型的 reasoning tokens 本就计入 completion）。
     billed_out = max(c + th, t - p if t >= p else 0)
+    # 隐式缓存命中部分：官方按输入价的 10% 计费（90% off），p 已包含这部分
+    cached = int(getattr(um, "cached_content_token_count", 0) or 0)
     return {
         "prompt_tokens": p,
         "completion_tokens": billed_out,
         "thoughts_token_count": th,
+        "cached_tokens": cached,
         "total_tokens": p + billed_out,
     }
 
@@ -1272,12 +1275,14 @@ def _stats_html(data: Dict[str, Any]) -> str:
   <span class="k">今日请求</span> <span class="v">REQ</span> &nbsp;&nbsp;
   <span class="k">今日 tokens</span> <span class="v">TOK</span> &nbsp;&nbsp;
   <span class="k">失败</span> <span class="v">FAIL</span> &nbsp;&nbsp;
+  <span class="k">缓存命中</span> <span class="v">HIT</span> &nbsp;&nbsp;
   <span class="k">今日估算</span> <span class="v">$COST</span>
   <ul>MODELS</ul>
 </div>
 <table><tr><th>日期</th><th>请求</th><th>tokens</th><th>失败</th><th>估算 $</th></tr>ROWS</table>
 <div class="sub" style="margin-top:14px">NOTE</div>
-""".replace("COST", "{:.4f}".format(float(today.get("cost") or 0)))
+""".replace("HIT", "{:.0%}".format(float(today.get("cache_hit_ratio") or 0)))
+        .replace("COST", "{:.4f}".format(float(today.get("cost") or 0)))
         .replace("NOTE", note)
         .replace("MODELS", by_model or "<li style='color:#8b93a7'>暂无</li>")
         .replace("DTOK", "{:,}".format(int(limits.get("daily_tokens", 0) or 0)))
@@ -1434,6 +1439,13 @@ async def chat_completions(req: ChatRequest, request: Request):
                 [c["function"]["name"] for c in tool_calls],
             )
             u = _usage(resp)
+            log.info(
+                "用量 in=%d cache=%d out=%d thoughts=%d",
+                u["prompt_tokens"],
+                u["cached_tokens"],
+                u["completion_tokens"],
+                u["thoughts_token_count"],
+            )
             USAGE.record(
                 model,
                 u["prompt_tokens"],
@@ -1442,6 +1454,7 @@ async def chat_completions(req: ChatRequest, request: Request):
                 ok=True,
                 tools=len(tool_calls),
                 thoughts=u["thoughts_token_count"],
+                cached=u["cached_tokens"],
             )
             return JSONResponse(payload)
         except Exception as exc:
@@ -1616,6 +1629,8 @@ async def chat_completions(req: ChatRequest, request: Request):
                 int((time.time() - t0) * 1000),
                 ok=True,
                 tools=len(pending_calls),
+                thoughts=last_usage.get("thoughts_token_count", 0),
+                cached=last_usage.get("cached_tokens", 0),
             )
         except Exception as exc:
             log.exception("流式调用失败")

@@ -141,6 +141,18 @@ python vertex_openai_proxy.py
 注意两点：**长上下文档**（如 2.5 Pro >200k token）单价更高，这里只取标准档；
 `Claude` 不在该价目表内，故未配置，用到时会出现在 `missing_prices` 里。
 
+#### 缓存折扣（为什么账单比"标价×token"低很多）
+
+Gemini 的**隐式上下文缓存默认开启**，命中部分按输入价的 **10%** 计费（`_cache_discount: 0.9`）。
+Agent 场景每轮都会重发几乎相同的前缀（system prompt + 工具定义 + 已读文件），命中率往往很高。
+
+- 响应 `usage_metadata` 里的 `cachedContentTokenCount` 就是命中量，本代理已记录为账本里的 `cache` 字段
+- `/stats` 同时给出「缓存命中率」，费用按 `未命中×全价 + 命中×一折 + 输出×全价` 计算
+- 门槛：Gemini 4 / 3 系列 4,096 token，**3.8 Flash 6,144**，2 系列 2,048
+
+实测（同一段 9,307 token 前缀连发两次）：第二次 `cache=4081`，命中 44%。
+Agent 真实负载因前缀更稳定，命中率通常更高。
+
 - `_note` 会原样显示在 `/stats` 页面底部，用来提醒"这是示例价"
 - 没配价格的模型不会编造金额，会列在 `/stats` 的 `missing_prices` 里
 - 价格**只用于估算展示，不参与限额拦截**（避免厂商调价导致误拦）
