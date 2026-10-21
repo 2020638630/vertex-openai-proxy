@@ -14,6 +14,7 @@ vertex_openai_proxy.py
 from __future__ import annotations
 
 import base64
+import hashlib
 import itertools
 import json
 import logging
@@ -1074,13 +1075,27 @@ def _err(message: str, status: int = 500, etype: str = "proxy_error") -> JSONRes
     )
 
 
+def _conv_fingerprint(messages: List[Dict[str, Any]]) -> str:
+    """用首条用户消息做会话指纹：变了就算新会话（额度用完时在这里拦）。"""
+    for m in messages or []:
+        if (m.get("role") or "").lower() == "user":
+            content = m.get("content")
+            raw = (
+                content
+                if isinstance(content, str)
+                else json.dumps(content, ensure_ascii=False, sort_keys=True)
+            )
+            return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:16]
+    return "empty"
+
+
 def _budget_response(exc: BudgetExceeded) -> JSONResponse:
     return JSONResponse(
         status_code=429,
         content={
             "error": {
-                "message": "[额度] %s。明日 00:00 重置，或调高 .env 里的限额"
-                "（当前 LIMIT_MODE=block 才会拦截，设 warn 则只记日志）" % exc,
+                "message": "[额度] %s。明日 00:00 自动重置；"
+                "也可调高 .env 里的 DAILY_UNCACHED_LIMIT / DAILY_TOKEN_LIMIT" % exc,
                 "type": "rate_limit",
                 "code": 429,
             }
@@ -1395,9 +1410,11 @@ async def chat_completions(req: ChatRequest, request: Request):
     stream = bool(body.get("stream"))
     t0 = time.time()
 
-    # 用量守卫：warn 模式只记日志，block 模式才返回 429
+    # 用量守卫：软着陆 —— 当前会话放行，下一段会话开始才拦
     try:
-        USAGE.check()
+        USAGE.check(
+            new_session=USAGE.session_start(_conv_fingerprint(body.get("messages")))
+        )
     except BudgetExceeded as exc:
         log.warning("额度拦截: %s", exc)
         return _budget_response(exc)

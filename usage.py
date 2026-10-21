@@ -35,6 +35,13 @@ def _int_env(key: str, default: int) -> int:
         return default
 
 
+def _float_env(key: str, default: float) -> float:
+    try:
+        return float(os.getenv(key, str(default)) or default)
+    except ValueError:
+        return default
+
+
 class BudgetExceeded(RuntimeError):
     """block 模式下超限抛出。"""
 
@@ -123,8 +130,13 @@ class Usage:
         self.mode = (os.getenv("LIMIT_MODE") or "warn").strip().lower()
         self.rpm = _int_env("RPM_LIMIT", 30)
         self.daily_req = _int_env("DAILY_REQ_LIMIT", 500)
-        self.daily_tokens = _int_env("DAILY_TOKEN_LIMIT", 2_000_000)
+        self.daily_tokens = _int_env("DAILY_TOKEN_LIMIT", 10_000_000)
+        # 主口径：只算「未命中缓存」的输入 token（命中部分官方打一折）
+        self.daily_uncached = _int_env("DAILY_UNCACHED_LIMIT", 5_000_000)
+        # 兜底：总量超过限额这么多倍时，即使当前会话也强制拦（0 = 关闭）
+        self.hard_mult = _float_env("LIMIT_HARD_MULTIPLIER", 3.0)
         self.keep_days = _int_env("USAGE_KEEP_DAYS", 14)
+        self._conv_fp = ""
         self._lock = threading.Lock()
         self._loaded_day = ""
         self._last_cleanup = 0.0
@@ -136,6 +148,7 @@ class Usage:
         self.fail = 0
         self.tokens_in = 0
         self.tokens_out = 0
+        self.tokens_cached = 0
         self.by_model: Counter = Counter()
         self.window: deque = deque()
 
@@ -166,6 +179,7 @@ class Usage:
             self.fail += 1
         self.tokens_in += int(rec.get("in") or 0)
         self.tokens_out += int(rec.get("out") or 0)
+        self.tokens_cached += int(rec.get("cache") or 0)
         self.by_model[str(rec.get("model") or "?")] += 1
 
     def _cleanup(self) -> None:
@@ -226,8 +240,24 @@ class Usage:
                 log.warning("写入用量失败: %s", exc)
         self._cleanup()
 
-    def check(self) -> List[str]:
-        """请求入口调用；返回告警文案列表。block 模式下超限抛 BudgetExceeded。"""
+    def session_start(self, fp: str) -> bool:
+        """判断这是不是一段新会话（按首条用户消息的指纹）。"""
+        with self._lock:
+            new = fp != self._conv_fp
+            self._conv_fp = fp
+            return new
+
+    def check(self, new_session: bool = False) -> List[str]:
+        """请求入口调用。
+
+        口径：主看「未命中缓存」的输入 token（命中部分官方打一折），
+        另有一条总 token 兜底。
+
+        软着陆：额度用完后**不打断当前会话**，只记预警；
+        等到下一段会话开始（new_session=True）才真正返回 429。
+        例外：总量超过 LIMIT_HARD_MULTIPLIER 倍时强制拦截（防死循环），
+        该倍率设为 0 可完全关闭。
+        """
         with self._lock:
             self._ensure_day()
             now = time.time()
@@ -237,30 +267,63 @@ class Usage:
 
             problems: List[str] = []
             retry = 0
-            if self.rpm and len(self.window) > self.rpm:
+            rpm_hit = bool(self.rpm and len(self.window) > self.rpm)
+            if rpm_hit:
                 problems.append(
                     "近 60 秒请求数 %d，超过上限 %d" % (len(self.window), self.rpm)
                 )
-                retry = 60
             if self.daily_req and self.requests >= self.daily_req:
                 problems.append(
                     "今日请求 %d 次，超过上限 %d" % (self.requests, self.daily_req)
                 )
                 retry = max(retry, _seconds_to_midnight())
-            used = self.tokens_in + self.tokens_out
-            if self.daily_tokens and used >= self.daily_tokens:
+
+            total = self.tokens_in + self.tokens_out
+            uncached = max(0, self.tokens_in - self.tokens_cached)
+            if self.daily_uncached and uncached >= self.daily_uncached:
                 problems.append(
-                    "今日已用 %d tokens，超过上限 %d" % (used, self.daily_tokens)
+                    "今日未命中缓存的输入 %d tokens，超过上限 %d"
+                    % (uncached, self.daily_uncached)
+                )
+                retry = max(retry, _seconds_to_midnight())
+            if self.daily_tokens and total >= self.daily_tokens:
+                problems.append(
+                    "今日总用量 %d tokens，超过上限 %d" % (total, self.daily_tokens)
                 )
                 retry = max(retry, _seconds_to_midnight())
 
+            hard = bool(
+                self.hard_mult
+                and self.daily_tokens
+                and total >= self.daily_tokens * self.hard_mult
+            )
+
         if not problems:
             return []
+
         text = "；".join(problems)
-        if self.mode == "block":
-            raise BudgetExceeded(text, retry or 60)
-        # warn 模式：只在日志里说一声，不打扰客户端
-        log.warning("[额度预警] %s（当前 LIMIT_MODE=warn，未拦截）", text)
+        if self.mode != "block":
+            log.warning("[额度预警] %s（LIMIT_MODE=warn，未拦截）", text)
+            return problems
+
+        # 频率超限属于即时保护，直接拦（60 秒后可重试），不参与软着陆
+        if rpm_hit:
+            raise BudgetExceeded(text, 60)
+
+        if hard:
+            log.warning(
+                "[额度熔断] %s（已超 %.0f 倍上限，强制拦截）", text, self.hard_mult
+            )
+            raise BudgetExceeded(text + "；已超硬阈值，强制拦截", retry or 60)
+
+        if new_session:
+            log.warning("[额度拦截] %s（新会话开始，拦截）", text)
+            raise BudgetExceeded(
+                text + "；上一段会话已结束，请明天再试或调高限额", retry or 60
+            )
+
+        # 当前会话中途：放过，只在日志里预警，等下一段会话再拦
+        log.warning("[额度预警] %s（当前会话继续放行，将在下一会话拦截）", text)
         return problems
 
     def snapshot(self) -> Dict[str, Any]:
@@ -273,12 +336,16 @@ class Usage:
                 "fail": self.fail,
                 "tokens_in": self.tokens_in,
                 "tokens_out": self.tokens_out,
+                "tokens_cached": self.tokens_cached,
+                "tokens_uncached": max(0, self.tokens_in - self.tokens_cached),
                 "tokens_total": self.tokens_in + self.tokens_out,
                 "by_model": dict(self.by_model),
                 "limits": {
                     "rpm": self.rpm,
                     "daily_requests": self.daily_req,
                     "daily_tokens": self.daily_tokens,
+                    "daily_uncached": self.daily_uncached,
+                    "hard_multiplier": self.hard_mult,
                 },
             }
 

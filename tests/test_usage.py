@@ -17,6 +17,8 @@ def u(tmp_path, monkeypatch):
     monkeypatch.setenv("RPM_LIMIT", "30")
     monkeypatch.setenv("DAILY_REQ_LIMIT", "500")
     monkeypatch.setenv("DAILY_TOKEN_LIMIT", "2000000")
+    monkeypatch.setenv("DAILY_UNCACHED_LIMIT", "2000000")
+    monkeypatch.setenv("LIMIT_HARD_MULTIPLIER", "0")  # 测试里默认关掉熔断
     return Usage(data_dir=str(tmp_path))
 
 
@@ -62,10 +64,40 @@ def test_block_mode_raises_with_retry_after(u):
     u.daily_tokens = 10
     u.record("m", 100, 0)
 
+    # 软着陆：新会话开始才拦
     with pytest.raises(BudgetExceeded) as ei:
-        u.check()
+        u.check(new_session=True)
     assert ei.value.retry_after > 0
     assert "token" in str(ei.value)
+
+
+def test_soft_landing_lets_current_session_continue(u):
+    u.mode = "block"
+    u.daily_tokens = 10
+    u.record("m", 100, 0)
+
+    problems = u.check(new_session=False)  # 当前会话中途：只预警，不抛异常
+    assert problems, "超限时应返回问题描述供日志使用"
+
+
+def test_uncached_metric_ignores_cache_hits(u):
+    u.mode = "block"
+    u.daily_uncached = 1000
+    u.daily_tokens = 10_000_000
+    # 输入 9000，但 8500 命中缓存 -> 未命中只有 500，不该拦
+    u.record("m", 9000, 10, cached=8500)
+    assert u.check(new_session=True) == []
+
+
+def test_hard_multiplier_forces_block_mid_session(u):
+    u.mode = "block"
+    u.daily_tokens = 100
+    u.hard_mult = 3.0
+    u.record("m", 400, 0)  # 已超 4 倍
+
+    with pytest.raises(BudgetExceeded) as ei:
+        u.check(new_session=False)
+    assert "硬阈值" in str(ei.value)
 
 
 def test_rpm_window(u):

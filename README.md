@@ -116,17 +116,23 @@ python vertex_openai_proxy.py
 - 记账在**响应完成后**写入，重启会从当天文件重建计数，不会清零
 - 启动时读回当天账本，所以重启不影响当日累计
 
-### 三档限额
+### 限额与「软着陆」
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `RPM_LIMIT` | 30 | 60 秒滑动窗口，防 Agent 死循环 |
+| `RPM_LIMIT` | 30 | 60 秒滑动窗口，超了**立即** 429（60 秒后恢复） |
+| `DAILY_UNCACHED_LIMIT` | 5,000,000 | **主口径**：只算未命中缓存的输入 token（约 $25/天） |
+| `DAILY_TOKEN_LIMIT` | 10,000,000 | 兜底：in + out 总 token |
 | `DAILY_REQ_LIMIT` | 500 | 每日请求数 |
-| `DAILY_TOKEN_LIMIT` | 2,000,000 | 每日 in+out token |
-| `LIMIT_MODE` | `warn` | `warn` 只记日志；`block` 才返回 429 |
+| `LIMIT_HARD_MULTIPLIER` | 3 | 总量超上限 N 倍时强制熔断；`0` = 关闭 |
+| `LIMIT_MODE` | `block` | `warn` 只记日志不拦；`block` 启用软着陆 |
 
-默认 **warn**：超了只在 `logs/proxy.log` 里留一条 `[额度预警]`，不影响任务。
-观察一段时间觉得水位合适，把 `LIMIT_MODE=block` 打开即可硬拦（返回 429 + `Retry-After`）。
+**为什么按"未命中 token"记账**：缓存命中部分官方只收 1 折（见下节），
+按总 token 算会把额度算虚高 —— 实测同一天两轮，命中率 0% 和 81% 的消耗差了 2 倍。
+
+**软着陆**：额度用完后**不会掐断正在跑的会话**，只写 `[额度预警]`；
+等到**下一段会话的第一条消息**（按首条 user 消息指纹识别）才返回 429。
+例外：总量超过 `LIMIT_HARD_MULTIPLIER` 倍时强制熔断，防 Agent 死循环一夜烧穿。
 
 ### 估算花费
 
