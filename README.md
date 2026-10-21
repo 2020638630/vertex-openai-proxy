@@ -133,8 +133,13 @@ python vertex_openai_proxy.py
 单价放在根目录 `prices.json`（美元 / 百万 token），**改完不用重启**，`/stats` 每次现读：
 
 ```json
-{ "_note": "示例价，请核对", "gemini-3.8-flash": { "in": 0.3, "out": 2.5 } }
+{ "gemini-4-argon": { "in": 4.0, "out": 20.0 },
+  "gemini-3.8-flash": { "in": 0.75, "out": 3.75 } }
 ```
+
+默认值取自作者本机结算账号的价目表导出（**Default 计费模式**，不含 1/3 年节省计划折扣）。
+注意两点：**长上下文档**（如 2.5 Pro >200k token）单价更高，这里只取标准档；
+`Claude` 不在该价目表内，故未配置，用到时会出现在 `missing_prices` 里。
 
 - `_note` 会原样显示在 `/stats` 页面底部，用来提醒"这是示例价"
 - 没配价格的模型不会编造金额，会列在 `/stats` 的 `missing_prices` 里
