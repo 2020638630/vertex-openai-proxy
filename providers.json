@@ -34,6 +34,13 @@
     ]
   },
 
+  "aistudio": {
+    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "api_key_env": "GOOGLE_AI_STUDIO_KEY",
+    "models": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+    "_note": "Google AI Studio（Gemini API）的 OpenAI 兼容端点；与走 Vertex 的 gemini-* 是两条独立计费链路。填好 key 后可用 `aistudio/gemini-2.5-flash` 调用；具体可用模型请先 GET /v1/models 核对。"
+  },
+
   "siliconflow": {
     "base_url": "https://api.siliconflow.cn/v1",
     "api_key_env": "SILICONFLOW_API_KEY",
