@@ -197,7 +197,10 @@ def _load_sig_cache() -> None:
                 continue
             try:
                 rec = json.loads(line)
-                _SIG_CACHE[rec["id"]] = _load_part(rec["part"])
+                # 老记录没有 backend 字段，都是 Vertex 产出的
+                _SIG_CACHE[_sig_key(rec["id"], rec.get("backend") or "vertex")] = (
+                    _load_part(rec["part"])
+                )
             except Exception:
                 continue
         log.info("已恢复 %d 条工具调用签名缓存", len(_SIG_CACHE))
@@ -205,12 +208,18 @@ def _load_sig_cache() -> None:
         log.warning("恢复签名缓存失败: %s", exc)
 
 
-def _remember_part(call_id: str, part: Any) -> None:
+def _sig_key(call_id: str, backend: str) -> str:
+    """签名是分后端签发的：Vertex 的签名喂给 AI Studio 会被拒，必须分开存。"""
+    return "%s:%s" % (backend or "vertex", call_id)
+
+
+def _remember_part(call_id: str, part: Any, backend: str = "vertex") -> None:
     global _sig_writes
     if not call_id or part is None:
         return
-    _SIG_CACHE[call_id] = part
-    _SIG_CACHE.move_to_end(call_id)
+    key = _sig_key(call_id, backend)
+    _SIG_CACHE[key] = part
+    _SIG_CACHE.move_to_end(key)
     while len(_SIG_CACHE) > _SIG_CACHE_MAX:
         _SIG_CACHE.popitem(last=False)
     # 落盘：重启后 3.8-flash / 4-argon 的旧对话才还能续
@@ -219,7 +228,8 @@ def _remember_part(call_id: str, part: Any) -> None:
         with open(_SIG_FILE, "a", encoding="utf-8") as f:
             f.write(
                 json.dumps(
-                    {"id": call_id, "part": _dump_part(part)}, ensure_ascii=False
+                    {"id": call_id, "backend": backend, "part": _dump_part(part)},
+                    ensure_ascii=False,
                 )
                 + "\n"
             )
@@ -285,6 +295,27 @@ def _auth_mode() -> Tuple[str, str, str, str]:
     else:
         mode = "service_account" if (has_sa and project and location) else "api_key"
     return mode, key, project, location
+
+
+_ai_client: Optional[genai.Client] = None
+_ai_client_key: str = ""
+
+
+def get_aistudio_client() -> genai.Client:
+    """AI Studio（Gemini 官方接口）客户端：api_key 鉴权，不用服务账号。"""
+    global _ai_client, _ai_client_key
+    load_dotenv(override=True)
+    key = (os.getenv("GOOGLE_AI_STUDIO_KEY") or "").strip()
+    if not key:
+        raise RuntimeError(
+            "GOOGLE_AI_STUDIO_KEY 为空：请在 .env 填入 AI Studio 的 key（aistudio.google.com/apikey）"
+        )
+    if _ai_client is not None and _ai_client_key == key:
+        return _ai_client
+    _ai_client = genai.Client(api_key=key)
+    _ai_client_key = key
+    log.info("AI Studio client 已初始化 (api_key=%s...)", key[:6])
+    return _ai_client
 
 
 def get_client() -> genai.Client:
@@ -447,6 +478,7 @@ def _as_text(content: Any) -> str:
 
 def build_contents(
     messages: List[Dict[str, Any]],
+    backend: str = "vertex",
 ) -> Tuple[Optional[types.Content], List[types.Content]]:
     """返回 (system_instruction, contents)，含 tool_calls / tool 结果的双向映射"""
     system_chunks: List[str] = []
@@ -538,7 +570,7 @@ def build_contents(
                     fargs = {"_raw": fn.get("arguments")}
                 if not isinstance(fargs, dict):
                     fargs = {"value": fargs}
-                cached = _SIG_CACHE.get(str(tc.get("id") or ""))
+                cached = _SIG_CACHE.get(_sig_key(str(tc.get("id") or ""), backend))
                 if cached is not None:
                     # 用当初下发的原始 part，把 thought_signature 一并还原
                     call_parts.append(cached)
@@ -680,7 +712,7 @@ def convert_tools(body: Dict[str, Any]) -> Tuple[Optional[List[types.Tool]], Any
     return [types.Tool(function_declarations=decls)], tool_config
 
 
-def extract_tool_calls(resp: Any) -> List[Dict[str, Any]]:
+def extract_tool_calls(resp: Any, backend: str = "vertex") -> List[Dict[str, Any]]:
     """从 Gemini 响应里抽出 functionCall，转成 OpenAI tool_calls 结构"""
     calls: List[Dict[str, Any]] = []
     try:
@@ -694,7 +726,7 @@ def extract_tool_calls(resp: Any) -> List[Dict[str, Any]]:
             continue
         args = getattr(fc, "args", None)
         call_id = "call_" + uuid.uuid4().hex[:24]
-        _remember_part(call_id, part)  # 记下带 thought_signature 的原始 part
+        _remember_part(call_id, part, backend)  # 记下带 thought_signature 的原始 part
         calls.append(
             {
                 "id": call_id,
@@ -1066,6 +1098,7 @@ def generate_with_bridge(
     config: Optional[types.GenerateContentConfig],
     enabled: bool,
     max_rounds: int = 3,
+    backend: str = "vertex",
 ) -> Any:
     """带服务端工具自动代执行的生成；遇到前端工具则原样交回客户端。"""
     work = list(contents)
@@ -1076,7 +1109,7 @@ def generate_with_bridge(
         if not enabled:
             return resp
 
-        calls = extract_tool_calls(resp)
+        calls = extract_tool_calls(resp, backend)
         if not calls:
             return resp
 
@@ -1303,6 +1336,15 @@ async def _compat_completions(
         first = await run_in_threadpool(next, gen, None)
     except Exception as exc:
         log.exception("compat 建流失败")
+        # 4xx 多半是请求本身不被上游接受，把出站请求打出来（脱敏已在前面做过）
+        if " 4" in str(exc)[:20]:
+            try:
+                log.warning(
+                    "compat 出站请求(截断): %s",
+                    json.dumps(payload, ensure_ascii=False)[:3000],
+                )
+            except Exception:
+                pass
         return _err(_compat_err(exc, provider, cfg), 502, "upstream_error")
 
     def event_stream():
@@ -1695,12 +1737,22 @@ async def chat_completions(req: ChatRequest, request: Request):
     if model.lower().startswith("claude"):
         return await _claude_completions(body, san, model, stream)
 
+    # AI Studio 本质是 Gemini 官方接口，必须走原生通道：
+    # 它的 OpenAI 兼容层要求回传 functionCall 的 thought_signature，
+    # 而 OpenAI 协议里没这个字段，多轮工具调用必然 400。
+    backend = "vertex"
+    api_model = model
+    if model.lower().startswith("aistudio/"):
+        backend = "aistudio"
+        api_model = model.split("/", 1)[1]
+        log.info("AI Studio 原生通道: %s -> %s", model, api_model)
+
     # 通用 OpenAI 兼容通道（DeepSeek / GLM / Grok / OpenAI / Ollama / 中转站）
-    routed = compat.resolve(model) if compat else None
+    routed = compat.resolve(model) if (compat and backend == "vertex") else None
     if routed:
         return await _compat_completions(body, san, model, routed, stream)
 
-    system, contents = build_contents(body.get("messages") or [])
+    system, contents = build_contents(body.get("messages") or [], backend)
 
     if not contents:
         return _err("messages 不能为空", 400, "invalid_request_error")
@@ -1753,7 +1805,7 @@ async def chat_completions(req: ChatRequest, request: Request):
         bridge_rounds = 3
 
     try:
-        client = get_client()
+        client = get_aistudio_client() if backend == "aistudio" else get_client()
     except Exception as exc:
         return _err(str(exc), 500, "config_error")
 
@@ -1765,14 +1817,15 @@ async def chat_completions(req: ChatRequest, request: Request):
             resp = await run_in_threadpool(
                 generate_with_bridge,
                 client,
-                model,
+                api_model,
                 contents,
                 config,
                 bridge_enabled,
                 bridge_rounds,
+                backend,
             )
             text = san.restore(resp.text or "") or ""
-            tool_calls = extract_tool_calls(resp)
+            tool_calls = extract_tool_calls(resp, backend)
             for tc in tool_calls:
                 tc["function"]["arguments"] = san.restore(tc["function"]["arguments"])
 
@@ -1848,7 +1901,7 @@ async def chat_completions(req: ChatRequest, request: Request):
     # 客户端才能显示具体原因，而不是笼统的 reason=unknown
     try:
         stream_iter, stream_first = await run_in_threadpool(
-            _open_stream, client, model, contents, config
+            _open_stream, client, api_model, contents, config
         )
     except Exception as exc:
         log.exception("流式建流失败")
@@ -1932,7 +1985,7 @@ async def chat_completions(req: ChatRequest, request: Request):
                         )
                     )
                     kind = server_tool_kind(fn["name"]) or "search"
-                    result = run_server_tool(client, model, kind, args)
+                    result = run_server_tool(client, api_model, kind, args)
                     log.info(
                         "服务端代执行(流式) %s -> %d 字符", fn["name"], len(result)
                     )
@@ -1950,17 +2003,23 @@ async def chat_completions(req: ChatRequest, request: Request):
                 work.append(types.Content(role="user", parts=fn_parts))
 
                 resp2 = generate_with_bridge(
-                    client, model, work, config, bridge_enabled, bridge_rounds
+                    client,
+                    api_model,
+                    work,
+                    config,
+                    bridge_enabled,
+                    bridge_rounds,
+                    backend,
                 )
                 text2 = san.restore(resp2.text or "") or ""
                 if text2:
                     yield sse(chunk({"content": text2}))
-                pending_calls = extract_tool_calls(resp2)
+                pending_calls = extract_tool_calls(resp2, backend)
 
             if pending_calls:
                 deltas = []
                 for i, tc in enumerate(pending_calls):
-                    _remember_part(tc["id"], tc.pop("_part", None))
+                    _remember_part(tc["id"], tc.pop("_part", None), backend)
                     raw_args = tc.pop("_args", None)
                     if raw_args is not None:
                         tc["function"]["arguments"] = san.restore(

@@ -92,6 +92,21 @@ OpenAI / 本地 Ollama / 自建中转站。一个实现覆盖全部，配置驱�
 
 `base_url` 为空 = 该 provider 未启用，不会被劫持。
 
+### Google AI Studio（原生通道，非兼容层）
+
+`aistudio/*` 虽然写在 `providers.json` 里，但**不走上面的通用兼容通道**，而是由代理用
+原生 `generateContent` 转发（`api_key` 鉴权，`GOOGLE_AI_STUDIO_KEY`）。
+
+原因：AI Studio 的 OpenAI 兼容层要求回传 `functionCall` 的 `thought_signature`，
+而 OpenAI 协议里没有这个字段 —— ZCode 回传工具历史时必丢，多轮工具调用会 400：
+
+```
+400 INVALID_ARGUMENT: Function call is missing a thought_signature in functionCall parts.
+```
+
+改走原生通道后，签名缓存按**后端隔离**（Vertex 签发的签名不能喂给 AI Studio），
+多轮工具调用实测正常：`gemini-3.1-flash-lite` 2.9s→2.2s、`gemini-3.1-pro-preview` 9.2s→2.6s。
+
 ### 本地优先：Ollama
 
 ```powershell

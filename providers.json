@@ -37,8 +37,14 @@
   "aistudio": {
     "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
     "api_key_env": "GOOGLE_AI_STUDIO_KEY",
-    "models": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
-    "_note": "Google AI Studio（Gemini API）的 OpenAI 兼容端点；与走 Vertex 的 gemini-* 是两条独立计费链路。填好 key 后可用 `aistudio/gemini-2.5-flash` 调用；具体可用模型请先 GET /v1/models 核对。"
+    "models": [
+      "gemini-flash-latest",
+      "gemini-3.1-flash-lite",
+      "gemini-3-flash-preview",
+      "gemini-pro-latest",
+      "gemini-3.1-pro-preview"
+    ],
+    "_note": "Google AI Studio（Gemini API），与走 Vertex 的 gemini-* 是两条独立计费链路。注意：本 provider 虽然列在这里，但【不走通用兼容通道】—— 它由代理用原生 generateContent 转发（api_key 鉴权），因为 AI Studio 的 OpenAI 兼容层要求回传 functionCall 的 thought_signature，而 OpenAI 协议无此字段，多轮工具调用必然 400。2026-10-21 实测：gemini-2.5-flash / 2.5-pro 对新账号已关闭（404），可用模型见 models 列表。"
   },
 
   "siliconflow": {
