@@ -174,13 +174,14 @@
     position: relative;
     overflow: hidden;
     transition: border-color 0.15s;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 4px 12px rgba(0, 0, 0, 0.25);
   }
   .kpi-card:hover { border-color: var(--border-light); }
   .kpi-card::before {
     content: '';
     position: absolute;
     top: 0; left: 0; right: 0; height: 2px;
-    background: var(--accent-color, var(--cyan));
+    background: linear-gradient(90deg, transparent, var(--accent-color, var(--cyan)), transparent);
   }
   .kpi-label {
     font-size: 12px;
@@ -189,6 +190,19 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 6px;
+  }
+  .kpi-icon {
+    width: 26px;
+    height: 26px;
+    margin: -4px 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    color: var(--accent-color, var(--cyan));
+    flex-shrink: 0;
   }
   .kpi-value {
     font-size: 25px;
@@ -239,10 +253,14 @@
     font-size: 11px;
   }
   .limit-name { color: var(--text-muted); }
-  .limit-stat { font-family: var(--mono); color: var(--text); }
+  .limit-stat { font-family: var(--mono); color: var(--text); white-space: nowrap; }
+  .ls-cur  { color: #f8fafc; font-weight: 600; }
+  .ls-sum  { color: #7c8aa0; font-weight: 400; }
+  .ls-pct  { color: #38bdf8; margin-left: 4px; }
+  .ls-over { color: var(--rose); margin-left: 6px; }
   .progress-bg {
     height: 7px;
-    background: #182236;
+    background: rgba(255, 255, 255, 0.06);
     border-radius: 4px;
     overflow: hidden;
   }
@@ -251,7 +269,21 @@
     width: 0%;
     border-radius: 4px;
     background: var(--cyan);
+    color: var(--cyan);
+    position: relative;
     transition: width 0.4s ease, background 0.3s;
+  }
+  .progress-fill::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: 50%;
+    width: 3px;
+    height: 3px;
+    margin-top: -1.5px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 8px currentColor;
   }
 
   /* 趋势图表区 */
@@ -273,27 +305,31 @@
     color: var(--text);
   }
   .tab-group {
-    display: flex;
-    background: #0d1424;
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    display: inline-flex;
+    gap: 2px;
     padding: 2px;
+    margin: -1px 0;
+    border-radius: 999px;
+    background: #090d16;
+    border: 1px solid var(--border);
   }
   .tab-btn {
+    border: 1px solid transparent;
+    border-radius: 999px;
     background: transparent;
-    border: none;
     color: var(--text-muted);
-    padding: 3px 10px;
+    padding: 3px 12px;
     font-size: 11px;
-    border-radius: 4px;
     cursor: pointer;
     font-family: var(--sans);
-    transition: all 0.15s;
+    transition: background 0.15s, color 0.15s;
   }
   .tab-btn.active {
-    background: #1e293b;
-    color: var(--cyan);
+    background: #23324a;
+    border-color: var(--border-light);
+    color: #f8fafc;
     font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   }
   .canvas-wrapper {
     position: relative;
@@ -524,7 +560,7 @@
     <div class="kpi-card" style="--accent-color: var(--amber);">
       <div class="kpi-label">
         <span>今日估算花费</span>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v12M16 10H9.5a2.5 2.5 0 0 0 0 5H14"/></svg>
+        <span class="kpi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v12M16 10H9.5a2.5 2.5 0 0 0 0 5H14"/></svg></span>
       </div>
       <div class="kpi-value" id="kpi-cost">$0.00</div>
       <div class="kpi-sub" id="kpi-cost-sub">近7日累计: $0.00</div>
@@ -534,7 +570,7 @@
     <div class="kpi-card" style="--accent-color: var(--cyan);">
       <div class="kpi-label">
         <span>今日 Tokens 总量</span>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+        <span class="kpi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg></span>
       </div>
       <div class="kpi-value" id="kpi-tokens">0</div>
       <div class="kpi-sub" id="kpi-tokens-sub">入: 0 · 出: 0</div>
@@ -544,7 +580,7 @@
     <div class="kpi-card" style="--accent-color: var(--blue);">
       <div class="kpi-label">
         <span>今日请求数</span>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        <span class="kpi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
       </div>
       <div class="kpi-value" id="kpi-reqs">0</div>
       <div class="kpi-sub" id="kpi-reqs-sub">失败: 0 次 · 成功率: 100.0%</div>
@@ -554,7 +590,7 @@
     <div class="kpi-card" style="--accent-color: var(--emerald);">
       <div class="kpi-label">
         <span>缓存命中率</span>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+        <span class="kpi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></span>
       </div>
       <div class="kpi-value" id="kpi-cache">0.0%</div>
       <div class="kpi-sub" id="kpi-cache-sub">已省: 0 tokens</div>
@@ -572,7 +608,7 @@
       <div class="limit-item">
         <div class="limit-labels">
           <span class="limit-name">未命中 Token 水位</span>
-          <span class="limit-stat" id="stat-uncached">0 / 0 (0.0%)</span>
+          <span class="limit-stat" id="stat-uncached"><span class="ls-cur">0</span><span class="ls-sum"> / 0</span><span class="ls-pct">(0.0%)</span></span>
         </div>
         <div class="progress-bg">
           <div class="progress-fill" id="bar-uncached"></div>
@@ -582,7 +618,7 @@
       <div class="limit-item">
         <div class="limit-labels">
           <span class="limit-name">总 Token 水位</span>
-          <span class="limit-stat" id="stat-tokens">0 / 0 (0.0%)</span>
+          <span class="limit-stat" id="stat-tokens"><span class="ls-cur">0</span><span class="ls-sum"> / 0</span><span class="ls-pct">(0.0%)</span></span>
         </div>
         <div class="progress-bg">
           <div class="progress-fill" id="bar-tokens"></div>
@@ -592,7 +628,7 @@
       <div class="limit-item">
         <div class="limit-labels">
           <span class="limit-name">每日请求上限</span>
-          <span class="limit-stat" id="stat-reqs">0 / 0 (0.0%)</span>
+          <span class="limit-stat" id="stat-reqs"><span class="ls-cur">0</span><span class="ls-sum"> / 0</span><span class="ls-pct">(0.0%)</span></span>
         </div>
         <div class="progress-bg">
           <div class="progress-fill" id="bar-reqs"></div>
@@ -699,9 +735,16 @@
   function limitStat(val, limit) {
     const cap = limit > 0 ? limit : 1;
     const rawPct = (val / cap) * 100;
-    let text = fmtNum(val) + ' / ' + fmtNum(cap) + ' (' + rawPct.toFixed(1) + '%)';
-    if (val > cap) text += ' · 超出 ' + fmtNum(val - cap);
-    return { text: text, pct: Math.min(100, rawPct), raw: rawPct, over: val > cap };
+    const pctText = '(' + rawPct.toFixed(1) + '%)';
+    let text = fmtNum(val) + ' / ' + fmtNum(cap) + ' ' + pctText;
+    let html = '<span class="ls-cur">' + fmtNum(val) + '</span>' +
+      '<span class="ls-sum"> / ' + fmtNum(cap) + '</span>' +
+      '<span class="ls-pct">' + pctText + '</span>';
+    if (val > cap) {
+      text += ' · 超出 ' + fmtNum(val - cap);
+      html += '<span class="ls-over">· 超出 ' + fmtNum(val - cap) + '</span>';
+    }
+    return { text: text, html: html, pct: Math.min(100, rawPct), raw: rawPct, over: val > cap };
   }
 
   // 内容未变时不重写 DOM，避免自动刷新闪烁
@@ -769,27 +812,30 @@
     const uncachedVal = today.tokens_uncached || 0;
     const uncachedLimit = limits.daily_uncached || 1;
     const uncachedPct = Math.min(100, (uncachedVal / uncachedLimit) * 100);
-    document.getElementById('stat-uncached').textContent = limitStat(uncachedVal, uncachedLimit).text;
+    setHTML(document.getElementById('stat-uncached'), limitStat(uncachedVal, uncachedLimit).html);
     const barUncached = document.getElementById('bar-uncached');
     barUncached.style.width = uncachedPct + '%';
     barUncached.style.background = uncachedPct > 90 ? 'var(--rose)' : (uncachedPct > 70 ? 'var(--amber)' : 'var(--cyan)');
+    barUncached.style.color = uncachedPct > 90 ? 'var(--rose)' : (uncachedPct > 70 ? 'var(--amber)' : 'var(--cyan)');
 
     // 总 Token 水位
     const tokensVal = tokTotal;
     const tokensLimit = limits.daily_tokens || 1;
     const tokensPct = Math.min(100, (tokensVal / tokensLimit) * 100);
-    document.getElementById('stat-tokens').textContent = limitStat(tokensVal, tokensLimit).text;
+    setHTML(document.getElementById('stat-tokens'), limitStat(tokensVal, tokensLimit).html);
     const barTokens = document.getElementById('bar-tokens');
     barTokens.style.width = tokensPct + '%';
     barTokens.style.background = tokensPct > 90 ? 'var(--rose)' : (tokensPct > 70 ? 'var(--amber)' : 'var(--cyan)');
+    barTokens.style.color = tokensPct > 90 ? 'var(--rose)' : (tokensPct > 70 ? 'var(--amber)' : 'var(--cyan)');
 
     // 请求数水位
     const reqLimit = limits.daily_requests || 1;
     const reqPct = Math.min(100, (reqs / reqLimit) * 100);
-    document.getElementById('stat-reqs').textContent = limitStat(reqs, reqLimit).text;
+    setHTML(document.getElementById('stat-reqs'), limitStat(reqs, reqLimit).html);
     const barReqs = document.getElementById('bar-reqs');
     barReqs.style.width = reqPct + '%';
     barReqs.style.background = reqPct > 90 ? 'var(--rose)' : (reqPct > 70 ? 'var(--amber)' : 'var(--blue)');
+    barReqs.style.color = reqPct > 90 ? 'var(--rose)' : (reqPct > 70 ? 'var(--amber)' : 'var(--blue)');
 
     // 6. 今日模型分布
     const byModel = today.by_model || {};
@@ -878,6 +924,7 @@
     // 提取近 7 日数据并倒序排序（从早到晚）
     let dailyList = (rawData.daily || []).slice().reverse();
     if (dailyList.length === 0) {
+      chartPoints = [];
       ctx.fillStyle = '#64748b';
       ctx.font = '12px ' + getComputedStyle(document.body).fontFamily;
       ctx.textAlign = 'center';
@@ -885,9 +932,17 @@
       return;
     }
 
-    const padding = { top: 25, right: 30, bottom: 35, left: 55 };
+    // 状态判定：requests > 0 必须排在最前（alive 是当天才上线的，历史数据可能 requests>0 但 alive=false）
+    const stateOf = d => {
+      if ((d.requests || 0) > 0) return 'traffic';
+      return d.alive ? 'idle' : 'nodata';
+    };
+
+    const padding = { top: 32, right: 30, bottom: 35, left: 55 };
     const chartW = width - padding.left - padding.right;
     const chartH = height - padding.top - padding.bottom;
+    const baseline = padding.top + chartH;
+    const monoStack = getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'monospace';
 
     // 获取当前指标数值
     const getVal = item => {
@@ -897,14 +952,22 @@
       return 0;
     };
 
+    // 数值文案：与坐标轴刻度同一口径（sign 为真时保留完整小数）
+    const fmtVal = (v, sign) => {
+      if (activeMetric === 'cost') return '$' + v.toFixed(sign ? 2 : (v >= 10 ? 1 : 2));
+      if (activeMetric === 'tokens') return fmtCompact(v);
+      return fmtNum(Math.round(v));
+    };
+
     const maxVal = Math.max(...dailyList.map(getVal), 1);
     const niceMax = maxVal === 1 ? 10 : Math.ceil(maxVal * 1.15);
 
-    // 绘制横向网格线与 Y 轴刻度
+    // 横向网格线：虚线弱化，画完立刻复位虚线（否则会污染后续折线）
     const gridRows = 4;
-    ctx.strokeStyle = '#1e293b';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
     ctx.lineWidth = 1;
-    ctx.font = '10px var(--mono)';
+    ctx.setLineDash([4, 4]);
+    ctx.font = '10px ' + monoStack;
     ctx.fillStyle = '#64748b';
     ctx.textAlign = 'right';
 
@@ -917,70 +980,170 @@
       ctx.lineTo(width - padding.right, y);
       ctx.stroke();
 
-      let label = '';
-      if (activeMetric === 'cost') label = '$' + v.toFixed(v >= 10 ? 1 : 2);
-      else if (activeMetric === 'tokens') label = fmtCompact(v);
-      else label = fmtNum(Math.round(v));
-
-      ctx.fillText(label, padding.left - 8, y + 3);
+      ctx.fillText(fmtVal(v, false), padding.left - 8, y + 3);
     }
+    ctx.setLineDash([]);
 
-    // 计算各点坐标与柱子
+    // 计算各点坐标与状态
     chartPoints = [];
     const stepX = chartW / Math.max(dailyList.length - 1, 1);
-    const barWidth = Math.min(36, (chartW / dailyList.length) * 0.45);
 
     dailyList.forEach((d, i) => {
       const x = dailyList.length === 1 ? padding.left + chartW / 2 : padding.left + i * stepX;
       const val = getVal(d);
       const y = padding.top + chartH - (val / niceMax) * chartH;
-      chartPoints.push({ x, y, data: d, val, date: d.date });
+      chartPoints.push({ x, y, data: d, val, date: d.date, state: stateOf(d) });
     });
 
-    // 1. 绘制背景柱状图
-    dailyList.forEach((d, i) => {
-      const pt = chartPoints[i];
-      const barH = padding.top + chartH - pt.y;
-      const bx = pt.x - barWidth / 2;
-      const by = pt.y;
+    // 相邻两点的平滑贝塞尔：控制点夹在两点之间，曲线不会高于原始数据
+    const curveTo = (p1, p2) => {
+      const lo = Math.min(p1.y, p2.y);
+      const hi = Math.max(p1.y, p2.y);
+      const cy1 = Math.min(hi, Math.max(lo, p1.y));
+      const cy2 = Math.min(hi, Math.max(lo, p2.y));
+      ctx.bezierCurveTo(p1.x + (p2.x - p1.x) / 3, cy1, p1.x + (p2.x - p1.x) * 2 / 3, cy2, p2.x, p2.y);
+    };
 
-      const grad = ctx.createLinearGradient(0, by, 0, padding.top + chartH);
-      grad.addColorStop(0, 'rgba(6, 182, 212, 0.4)');
-      grad.addColorStop(1, 'rgba(6, 182, 212, 0.03)');
+    // 有数据的连续段（无数据处断开）
+    const runs = [];
+    let runStart = -1;
+    chartPoints.forEach((pt, i) => {
+      if (pt.state === 'nodata') {
+        if (runStart >= 0) { runs.push([runStart, i - 1]); runStart = -1; }
+      } else if (runStart < 0) {
+        runStart = i;
+      }
+    });
+    if (runStart >= 0) runs.push([runStart, chartPoints.length - 1]);
 
-      ctx.fillStyle = grad;
+    // 面积渐变：只填有数据的连续段
+    const areaGrad = ctx.createLinearGradient(0, padding.top, 0, baseline);
+    areaGrad.addColorStop(0, 'rgba(6, 182, 212, 0.28)');
+    areaGrad.addColorStop(1, 'rgba(6, 182, 212, 0)');
+    ctx.fillStyle = areaGrad;
+    runs.forEach(([a, b]) => {
+      if (b <= a) return;
       ctx.beginPath();
-      ctx.roundRect ? ctx.roundRect(bx, by, barWidth, Math.max(barH, 2), [4, 4, 0, 0]) : ctx.rect(bx, by, barWidth, Math.max(barH, 2));
+      ctx.moveTo(chartPoints[a].x, baseline);
+      ctx.lineTo(chartPoints[a].x, chartPoints[a].y);
+      for (let i = a + 1; i <= b; i++) curveTo(chartPoints[i - 1], chartPoints[i]);
+      ctx.lineTo(chartPoints[b].x, baseline);
+      ctx.closePath();
       ctx.fill();
+    });
 
-      // X 轴日期刻度
-      ctx.fillStyle = '#94a3b8';
+    // 有流量日均值线（分母只算 requests > 0 的天）
+    const active = dailyList.filter(d => (d.requests || 0) > 0);
+    const mean = active.length ? active.reduce((sum, d) => sum + getVal(d), 0) / active.length : 0;
+
+    if (mean > 0) {
+      const meanY = padding.top + chartH - (mean / niceMax) * chartH;
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.55)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(padding.left, meanY);
+      ctx.lineTo(width - padding.right, meanY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.font = '10px ' + monoStack;
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.9)';
+      ctx.textAlign = 'right';
+      ctx.fillText('均值 ' + fmtVal(mean, true) + '（' + active.length + ' 天有流量）', width - padding.right - 2, meanY - 6);
+    }
+
+    // 折线：平滑曲线，遇到「无数据」重新起笔
+    ctx.strokeStyle = '#06b6d4';
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    let penDown = false;
+    let prevPt = null;
+    chartPoints.forEach(pt => {
+      if (pt.state === 'nodata') { penDown = false; prevPt = null; return; }
+      if (!penDown) { ctx.moveTo(pt.x, pt.y); penDown = true; }
+      else curveTo(prevPt, pt);
+      prevPt = pt;
+    });
+    ctx.stroke();
+
+    // 单日缺失桥接：中间只隔 1 天时，用灰虚线把两端连起来（数值未知，不编造）；
+    // 连续 2 天以上缺失仍然断开，避免把"停机一段时间"画成连续曲线
+    for (let i = 1; i < chartPoints.length - 1; i++) {
+      if (chartPoints[i].state !== 'nodata') continue;
+      const prev = chartPoints[i - 1];
+      const next = chartPoints[i + 1];
+      if (prev.state === 'nodata' || next.state === 'nodata') continue;
+      const yMid = prev.y + (next.y - prev.y) * 0.5;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.5)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(prev.x, prev.y);
+      ctx.lineTo(next.x, next.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // 空心点：表示"这天无数据，数值未知"
+      ctx.beginPath();
+      ctx.arc(chartPoints[i].x, yMid, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#090d16';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.7)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.font = '9px ' + monoStack;
       ctx.textAlign = 'center';
-      const shortDate = d.date ? d.date.slice(5) : ('Day ' + (i + 1));
+      const nl = '无数据';
+      const nlW = ctx.measureText(nl).width;
+      const nlY = yMid - 9;
+      ctx.fillStyle = 'rgba(9, 13, 22, 0.92)';
+      ctx.fillRect(chartPoints[i].x - nlW / 2 - 3, nlY - 9, nlW + 6, 12);
+      ctx.fillStyle = '#64748b';
+      ctx.fillText(nl, chartPoints[i].x, nlY);
+      ctx.restore();
+    }
+
+    // 三种状态的点：有流量实心大点 / 零调用灰色小点 / 无数据不画点
+    chartPoints.forEach(pt => {
+      if (pt.state === 'nodata') return;
+      ctx.beginPath();
+      if (pt.state === 'traffic') {
+        ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#06b6d4';
+        ctx.fill();
+        ctx.strokeStyle = '#090d16';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      } else {
+        ctx.arc(pt.x, pt.y, 2, 0, Math.PI * 2);
+        ctx.fillStyle = '#64748b';
+        ctx.fill();
+      }
+    });
+
+    // X 轴日期刻度
+    ctx.font = '10px ' + monoStack;
+    ctx.fillStyle = '#94a3b8';
+    ctx.textAlign = 'center';
+    chartPoints.forEach((pt, i) => {
+      const shortDate = pt.date ? pt.date.slice(5) : ('Day ' + (i + 1));
       ctx.fillText(shortDate, pt.x, height - 12);
     });
 
-    // 2. 绘制连续趋势折线
-    if (chartPoints.length > 1) {
-      ctx.beginPath();
-      ctx.strokeStyle = '#06b6d4';
-      ctx.lineWidth = 2.5;
-      chartPoints.forEach((pt, i) => {
-        if (i === 0) ctx.moveTo(pt.x, pt.y);
-        else ctx.lineTo(pt.x, pt.y);
-      });
-      ctx.stroke();
-
-      // 折线节点圆点
-      chartPoints.forEach(pt => {
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
-        ctx.fillStyle = '#090d16';
-        ctx.fill();
-        ctx.strokeStyle = '#06b6d4';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      });
+    // 极值标注：最高点上方 12px；靠右边界时改画在点的左上方
+    let peak = null;
+    chartPoints.forEach(pt => {
+      if (pt.state === 'nodata') return;
+      if (!peak || pt.val > peak.val) peak = pt;
+    });
+    if (peak && peak.val > 0) {
+      const peakText = fmtVal(peak.val, true) + ' · ' + (peak.date ? peak.date.slice(5) : '');
+      const flip = peak.x > width - padding.right - 60;
+      ctx.fillStyle = '#94a3b8';
+      ctx.textAlign = flip ? 'right' : 'center';
+      ctx.fillText(peakText, flip ? peak.x - 8 : peak.x, Math.max(12, peak.y - 12));
     }
   }
 
@@ -1009,6 +1172,10 @@
       tooltip.style.top = (closest.y - 10) + 'px';
 
       const d = closest.data;
+      if (closest.state === 'nodata') {
+        tooltip.innerHTML = '<div style="font-weight:600; color:#38bdf8; margin-bottom:3px;">' + d.date + '</div><div>无数据（当天代理未运行）</div>';
+        return;
+      }
       tooltip.innerHTML = `
         <div style="font-weight:600; color:#38bdf8; margin-bottom:3px;">${d.date}</div>
         <div>Tokens: <b>${fmtNum(d.tokens)}</b></div>
@@ -1016,6 +1183,9 @@
         <div>花费: <b>$${Number(d.cost || 0).toFixed(4)}</b></div>
         <div>缓存: <b>${fmtNum(d.cached || 0)}</b></div>
       `;
+      if (closest.state === 'idle') {
+        tooltip.innerHTML += '<div style="color:#94a3b8;">代理运行中，无请求</div>';
+      }
     } else {
       tooltip.style.display = 'none';
     }

@@ -118,6 +118,7 @@ LOG_FILE = setup_logging()
 
 USAGE = Usage()
 START_TS = time.time()
+USAGE.touch_alive(force=True)  # 启动即落一次心跳，区分「没运行」与「0 调用」
 
 HOST = os.getenv("PROXY_HOST", "127.0.0.1")
 PORT = int(os.getenv("PROXY_PORT", "4000") or 4000)
@@ -1613,6 +1614,7 @@ def get_model(model_id: str) -> Dict[str, Any]:
 
 @app.get("/healthz")
 def healthz() -> Dict[str, Any]:
+    USAGE.touch_alive()  # 心跳：让 /stats 能区分「没运行」与「运行了但 0 调用」
     return {"ok": True, "limit_mode": USAGE.mode, "uptime": int(time.time() - START_TS)}
 
 

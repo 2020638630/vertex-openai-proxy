@@ -165,6 +165,7 @@ class Usage:
         self._lock = threading.Lock()
         self._loaded_day = ""
         self._last_cleanup = 0.0
+        self._last_alive = 0.0
         self._reset()
 
     # ---------------------------------------------------------------- 内部
@@ -197,6 +198,25 @@ class Usage:
                         self._apply(json.loads(line))
             except Exception as exc:  # 账本坏了不能影响服务
                 log.warning("读取当日用量失败: %s", exc)
+
+    def _alive_path(self, day: Optional[str] = None) -> str:
+        return os.path.join(self.dir, "%s.alive" % (day or _today()))
+
+    def touch_alive(self, force: bool = False) -> None:
+        """写当日心跳文件：用于区分「代理没运行」和「运行了但 0 调用」。
+
+        节流到每分钟一次，避免 /healthz 被打爆时频繁落盘。
+        """
+        now = time.time()
+        if not force and now - self._last_alive < 60:
+            return
+        self._last_alive = now
+        try:
+            os.makedirs(self.dir, exist_ok=True)
+            with open(self._alive_path(), "w", encoding="utf-8") as f:
+                f.write(str(int(now)))
+        except Exception as exc:  # 心跳失败不能影响服务
+            log.warning("写心跳失败: %s", exc)
 
     def _apply(self, rec: Dict[str, Any]) -> None:
         self.requests += 1
@@ -397,6 +417,8 @@ class Usage:
                 "fail": 0,
                 "cost": 0.0,
                 "cached": 0,
+                # 心跳：区分「那天代理没运行」和「运行了但 0 调用」
+                "alive": os.path.exists(self._alive_path(d.isoformat())),
             }
             if os.path.exists(path):
                 try:
@@ -440,6 +462,7 @@ class Usage:
                 snap["cached"] = row["cached"]
                 tin = int(snap.get("tokens_in") or 0)
                 snap["cache_hit_ratio"] = round(row["cached"] / tin, 4) if tin else 0.0
+                snap["alive"] = row["alive"]
                 out["today"] = snap
             for k in ("requests", "tokens", "fail", "cached"):
                 total[k] += row[k]
