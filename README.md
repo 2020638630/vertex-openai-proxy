@@ -30,6 +30,22 @@ python vertex_openai_proxy.py
 
 或双击 `start_proxy.bat`（自带 Key 空值检查与端口占用检查）。自测：`test_proxy.bat`。
 
+### 推荐：后台模式启动（`start_proxy_daemon.bat`）
+
+```bat
+start_proxy_daemon.bat      :: 后台启动，窗口可关
+stop_proxy.bat              :: 停止（默认 4000，可传端口：stop_proxy.bat 4001）
+```
+
+**为什么需要它**：Windows 控制台的「快速编辑模式」下，只要你在窗口里**用鼠标框选文字**，
+控制台就会暂停输出，正在写 stdout 的进程会被阻塞 —— 表现为**端口还在监听、但所有 HTTP 请求超时**，
+日志也停在某一刻不再增长。前台模式跑代理很容易踩到（选个文字就"假死"）。
+
+后台模式把 stdout/stderr 重定向到 `logs\console.out.log` / `logs\console.err.log`，
+进程脱离控制台，关窗口、误按 Ctrl+S、框选文字都不再影响服务。
+
+> 出错时先看 `logs\console.err.log`（控制台输出与异常栈），再看 `logs\proxy.log`（应用日志）。
+
 客户端侧填：
 
 | 项 | 值 |
