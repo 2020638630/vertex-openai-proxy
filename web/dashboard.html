@@ -243,7 +243,7 @@
   }
   .limits-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
     gap: 16px;
   }
   .limit-item { display: flex; flex-direction: column; gap: 5px; }
@@ -604,6 +604,16 @@
       <span style="font-size:11px; color:var(--text-dim);" id="limit-rpm-tag">限流保护: 30 RPM</span>
     </div>
     <div class="limits-grid">
+      <!-- 今日花费 / 上限（主口径） -->
+      <div class="limit-item">
+        <div class="limit-labels">
+          <span class="limit-name">今日花费 水位</span>
+          <span class="limit-stat" id="stat-cost"><span class="ls-cur">$0.00</span><span class="ls-sum"> / $0</span><span class="ls-pct">(0.0%)</span></span>
+        </div>
+        <div class="progress-bg">
+          <div class="progress-fill" id="bar-cost"></div>
+        </div>
+      </div>
       <!-- 未命中 token / 上限 -->
       <div class="limit-item">
         <div class="limit-labels">
@@ -700,13 +710,26 @@
   let isFetching = false;
 
   // 工具函数：千分位格式化
+  // 数字显示模式：false = 完整（1,234,567），true = 带单位（123.5万 / 1.23亿）
+  // 点 KPI 数字或右上「数字」按钮切换，选择存 localStorage
+  let compactMode = localStorage.getItem('dash.compact') === '1';
+
+  function fmtCn(n) {
+    const v = Number(n) || 0;
+    const abs = Math.abs(v);
+    if (abs >= 1e8) return (v / 1e8).toFixed(abs >= 1e9 ? 1 : 2) + '亿';
+    if (abs >= 1e4) return (v / 1e4).toFixed(abs >= 1e6 ? 0 : 1) + '万';
+    return String(Math.round(v));
+  }
+
   function fmtNum(n) {
     if (n === null || n === undefined || isNaN(n)) return '0';
-    return Number(n).toLocaleString('en-US');
+    return compactMode ? fmtCn(n) : Number(n).toLocaleString('en-US');
   }
 
   // 工具函数：数值紧凑展示 (例如 5.5M)
   function fmtCompact(n) {
+    if (compactMode) return fmtCn(n);
     if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
     if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
     return String(n);
@@ -732,6 +755,20 @@
   }
 
   // 额度水位：返回文案（含超限标注）与封顶后的进度百分比
+  // 花费专用：金额保留两位小数，不能走整数的 fmtNum
+  function limitMoney(val, limit) {
+    const cap = limit > 0 ? limit : 1;
+    const rawPct = (val / cap) * 100;
+    const pctText = '(' + rawPct.toFixed(1) + '%)';
+    let html = '<span class="ls-cur">$' + val.toFixed(2) + '</span>' +
+      '<span class="ls-sum"> / $' + cap.toFixed(0) + '</span>' +
+      '<span class="ls-pct">' + pctText + '</span>';
+    if (val > cap) {
+      html += '<span class="ls-over">· 超 $' + (val - cap).toFixed(2) + '</span>';
+    }
+    return { html: html, pct: Math.min(100, rawPct), raw: rawPct, over: val > cap };
+  }
+
   function limitStat(val, limit) {
     const cap = limit > 0 ? limit : 1;
     const rawPct = (val / cap) * 100;
@@ -806,6 +843,28 @@
     // 5. 限额水位
     if (limits.rpm) {
       document.getElementById('limit-rpm-tag').textContent = '限流: ' + limits.rpm + ' RPM · 硬限额 ' + (limits.hard_multiplier || 3) + 'x';
+    }
+
+    // 今日花费 水位（主口径：按钱算比按 token 算合理）
+    const costVal = typeof today.cost === 'number' ? today.cost : 0;
+    const costLimit = limits.daily_cost || 0;
+    const costItem = document.getElementById('stat-cost');
+    if (costItem) {
+      const wrap = costItem.closest('.limit-item');
+      if (costLimit > 0) {
+        if (wrap) wrap.style.display = '';
+        const cs = limitMoney(costVal, costLimit);
+        setHTML(costItem, cs.html);
+        const barCost = document.getElementById('bar-cost');
+        if (barCost) {
+          const cCol = cs.pct > 90 ? 'var(--rose)' : (cs.pct > 70 ? 'var(--amber)' : 'var(--emerald)');
+          barCost.style.width = cs.pct + '%';
+          barCost.style.background = cCol;
+          barCost.style.color = cCol;
+        }
+      } else if (wrap) {
+        wrap.style.display = 'none';  // 没配 DAILY_COST_LIMIT 就整块隐藏
+      }
     }
 
     // 未命中 Token 水位
@@ -1238,6 +1297,37 @@
 
   // 页面就绪自动拉取
   document.addEventListener('DOMContentLoaded', fetchData);
+
+  // 数字显示切换：右上「数字」按钮，或直接点 KPI 上的大数字
+  function syncNumBtn() {
+    const b = document.getElementById('btn-num');
+    if (b) b.textContent = compactMode ? '数字：简写' : '数字：完整';
+  }
+
+  function toggleCompact() {
+    compactMode = !compactMode;
+    try { localStorage.setItem('dash.compact', compactMode ? '1' : '0'); } catch (e) {}
+    syncNumBtn();
+    if (rawData) render(rawData);   // 用缓存数据重渲染，不重新请求
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const controls = document.querySelector('.controls');
+    if (controls && !document.getElementById('btn-num')) {
+      const btn = document.createElement('button');
+      btn.className = 'btn-refresh';
+      btn.id = 'btn-num';
+      btn.title = '切换数字显示：完整数字 / 万·亿';
+      btn.addEventListener('click', toggleCompact);
+      controls.appendChild(btn);
+    }
+    document.querySelectorAll('.kpi-value').forEach(el => {
+      el.style.cursor = 'pointer';
+      el.title = '点击切换数字显示';
+      el.addEventListener('click', toggleCompact);
+    });
+    syncNumBtn();
+  });
 
   // 每 60 秒静默刷新一次；页面隐藏时暂停计时，手动刷新由 fetchData 重置
   setInterval(() => {
