@@ -149,6 +149,21 @@ def _seconds_to_midnight() -> int:
     return max(1, int((tomorrow - now).total_seconds()))
 
 
+_PRICE_CACHE: Dict[str, Any] = {"mtime": -1.0, "prices": {}}
+
+
+def _prices_cached() -> Dict[str, Dict[str, float]]:
+    """按 mtime 缓存价格表：check() 每请求都要算钱，不能每次都读盘。"""
+    try:
+        mtime = os.path.getmtime(_price_path())
+    except OSError:
+        mtime = -1.0
+    if mtime != _PRICE_CACHE["mtime"]:
+        _PRICE_CACHE["mtime"] = mtime
+        _PRICE_CACHE["prices"] = load_prices()
+    return _PRICE_CACHE["prices"]
+
+
 class Usage:
     def __init__(self, data_dir: Optional[str] = None) -> None:
         self.dir = data_dir or DEFAULT_DIR
@@ -158,6 +173,9 @@ class Usage:
         self.daily_tokens = _int_env("DAILY_TOKEN_LIMIT", 10_000_000)
         # 主口径：只算「未命中缓存」的输入 token（命中部分官方打一折）
         self.daily_uncached = _int_env("DAILY_UNCACHED_LIMIT", 5_000_000)
+        # 真正的硬约束：当日估算花费（美元）。0 = 关闭。
+        # 比 token 数量更合理 —— 同样 45M token，deepseek 约 $6，4-argon 要 $180。
+        self.daily_cost = _float_env("DAILY_COST_LIMIT", 25.0)
         # 兜底：总量超过限额这么多倍时，即使当前会话也强制拦（0 = 关闭）
         self.hard_mult = _float_env("LIMIT_HARD_MULTIPLIER", 3.0)
         self.keep_days = _int_env("USAGE_KEEP_DAYS", 14)
@@ -175,6 +193,7 @@ class Usage:
         self.tokens_in = 0
         self.tokens_out = 0
         self.tokens_cached = 0
+        self.cost = 0.0
         self.by_model: Counter = Counter()
         self.window: deque = deque()
 
@@ -225,7 +244,20 @@ class Usage:
         self.tokens_in += int(rec.get("in") or 0)
         self.tokens_out += int(rec.get("out") or 0)
         self.tokens_cached += int(rec.get("cache") or 0)
-        self.by_model[str(rec.get("model") or "?")] += 1
+        model = str(rec.get("model") or "?")
+        self.by_model[model] += 1
+        # 当日花费也要增量累计：限额按钱算，check() 不能每次都重算整个账本
+        self.cost += (
+            cost_of(
+                _prices_cached(),
+                model,
+                int(rec.get("in") or 0),
+                int(rec.get("out") or 0),
+                int(rec.get("cache") or 0),
+                cache_discount(),
+            )
+            or 0.0
+        )
 
     def _cleanup(self) -> None:
         now = time.time()
@@ -336,11 +368,22 @@ class Usage:
                     "今日总用量 %d tokens，超过上限 %d" % (total, self.daily_tokens)
                 )
                 retry = max(retry, _seconds_to_midnight())
+            if self.daily_cost and self.cost >= self.daily_cost:
+                problems.append(
+                    "今日估算花费 $%.2f，超过上限 $%.2f" % (self.cost, self.daily_cost)
+                )
+                retry = max(retry, _seconds_to_midnight())
 
+            # 硬熔断：token 或花费任一超到 N 倍，都强制拦（防 Agent 死循环烧穿）
             hard = bool(
                 self.hard_mult
-                and self.daily_tokens
-                and total >= self.daily_tokens * self.hard_mult
+                and (
+                    (self.daily_tokens and total >= self.daily_tokens * self.hard_mult)
+                    or (
+                        self.daily_cost
+                        and self.cost >= self.daily_cost * self.hard_mult
+                    )
+                )
             )
 
         if not problems:
@@ -384,12 +427,14 @@ class Usage:
                 "tokens_cached": self.tokens_cached,
                 "tokens_uncached": max(0, self.tokens_in - self.tokens_cached),
                 "tokens_total": self.tokens_in + self.tokens_out,
+                "cost": round(self.cost, 4),
                 "by_model": dict(self.by_model),
                 "limits": {
                     "rpm": self.rpm,
                     "daily_requests": self.daily_req,
                     "daily_tokens": self.daily_tokens,
                     "daily_uncached": self.daily_uncached,
+                    "daily_cost": self.daily_cost,
                     "hard_multiplier": self.hard_mult,
                 },
             }

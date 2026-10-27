@@ -1655,7 +1655,7 @@ def _stats_html(data: Dict[str, Any]) -> str:
  ul{margin:6px 0 0;padding-left:18px} li{margin:2px 0}
 </style>
 <h2>Vertex OpenAI Proxy</h2>
-<div class="sub">DATE · 模式 MODE · 上限 RPMV 次/分 · 日请求 DREQ · 日 token DTOK</div>
+<div class="sub">DATE · 模式 MODE · 上限 RPMV 次/分 · 日请求 DREQ · 日 token DTOK · 日花费上限 $DLIM</div>
 <div class="card">
   <span class="k">今日请求</span> <span class="v">REQ</span> &nbsp;&nbsp;
   <span class="k">今日 tokens</span> <span class="v">TOK</span> &nbsp;&nbsp;
@@ -1671,6 +1671,8 @@ def _stats_html(data: Dict[str, Any]) -> str:
         .replace("NOTE", note)
         .replace("MODELS", by_model or "<li style='color:#8b93a7'>暂无</li>")
         .replace("DTOK", "{:,}".format(int(limits.get("daily_tokens", 0) or 0)))
+        # 注意：占位符不能含 COST —— 上面的 .replace("COST", ...) 会先把它吃掉
+        .replace("DLIM", "{:g}".format(float(limits.get("daily_cost", 0) or 0)))
         .replace("DREQ", str(limits.get("daily_requests", "-")))
         .replace("DATE", str(today.get("date", "")))
         .replace("MODE", str(today.get("mode", "")))

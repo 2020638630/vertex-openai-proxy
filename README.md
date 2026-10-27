@@ -225,18 +225,30 @@ curl http://127.0.0.1:4000/v1/models  # 会列出 ollama/qwen2.5:7b 等
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `RPM_LIMIT` | 30 | 60 秒滑动窗口，超了**立即** 429（60 秒后恢复） |
-| `DAILY_UNCACHED_LIMIT` | 5,000,000 | **主口径**：只算未命中缓存的输入 token（约 $25/天） |
-| `DAILY_TOKEN_LIMIT` | 10,000,000 | 兜底：in + out 总 token |
+| **`DAILY_COST_LIMIT`** | **25** | **主口径：当日估算花费（美元）**，`0` = 关闭 |
+| `DAILY_UNCACHED_LIMIT` | 5,000,000 | 只算未命中缓存的输入 token（防单日反复重传） |
+| `DAILY_TOKEN_LIMIT` | 10,000,000 | 兜底：in + out 总 token（防死循环） |
 | `DAILY_REQ_LIMIT` | 500 | 每日请求数 |
-| `LIMIT_HARD_MULTIPLIER` | 3 | 总量超上限 N 倍时强制熔断；`0` = 关闭 |
+| `LIMIT_HARD_MULTIPLIER` | 3 | 花费/token 任一超上限 N 倍时强制熔断；`0` = 关闭 |
 | `LIMIT_MODE` | `block` | `warn` 只记日志不拦；`block` 启用软着陆 |
 
-**为什么按"未命中 token"记账**：缓存命中部分官方只收 1 折（见下节），
-按总 token 算会把额度算虚高 —— 实测同一天两轮，命中率 0% 和 81% 的消耗差了 2 倍。
+**为什么主口径是「钱」而不是「token」**：同一个 token 数量在不同模型上价格差几十倍。
+实测同一天 4520 万 token：
+
+```
+deepseek/deepseek-flash（$0.30/M，命中 96%）  →  $6.27
+gemini-4-argon         （$4.00/M）            →  约 $180
+```
+
+按 token 卡阈值必然两头不讨好：便宜模型没花多少就被拦，贵模型没拦住钱已经烧掉。
+花费按 `prices.json` 的单价实时累计（`_apply()` 里增量算，不重算账本）。
 
 **软着陆**：额度用完后**不会掐断正在跑的会话**，只写 `[额度预警]`；
 等到**下一段会话的第一条消息**（按首条 user 消息指纹识别）才返回 429。
-例外：总量超过 `LIMIT_HARD_MULTIPLIER` 倍时强制熔断，防 Agent 死循环一夜烧穿。
+例外：花费或 token 超过 `LIMIT_HARD_MULTIPLIER` 倍时强制熔断，防 Agent 死循环一夜烧穿。
+
+**成本口径的已知边界**：价格取自 `prices.json`，模型没配价时该次调用按 $0 计入
+（`/stats` 的 `missing_prices` 会列出来提示你补）；OpenRouter 的 `:free` 模型直接记 0。
 
 ### 估算花费
 

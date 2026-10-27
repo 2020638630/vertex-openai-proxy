@@ -18,6 +18,7 @@ def u(tmp_path, monkeypatch):
     monkeypatch.setenv("DAILY_REQ_LIMIT", "500")
     monkeypatch.setenv("DAILY_TOKEN_LIMIT", "2000000")
     monkeypatch.setenv("DAILY_UNCACHED_LIMIT", "2000000")
+    monkeypatch.setenv("DAILY_COST_LIMIT", "0")  # 默认关掉按钱限额，避免干扰其他用例
     monkeypatch.setenv("LIMIT_HARD_MULTIPLIER", "0")  # 测试里默认关掉熔断
     return Usage(data_dir=str(tmp_path))
 
