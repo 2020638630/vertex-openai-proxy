@@ -486,11 +486,19 @@ def _as_text(content: Any) -> str:
 def build_contents(
     messages: List[Dict[str, Any]],
     backend: str = "vertex",
+    require_sig: bool = False,
 ) -> Tuple[Optional[types.Content], List[types.Content]]:
-    """返回 (system_instruction, contents)，含 tool_calls / tool 结果的双向映射"""
+    """返回 (system_instruction, contents)，含 tool_calls / tool 结果的双向映射
+
+    require_sig=True 时（Gemini 3/4 系），历史工具调用若查不到 thought_signature，
+    不再重建裸 functionCall —— 那样会让模型"降级"，把工具调用写成文本
+    （`call:default_api:Bash{...}`），客户端收不到 tool_calls，整轮就卡死。
+    改为把该调用和它的结果都降级成纯文本，保住本轮的调用能力。
+    """
     system_chunks: List[str] = []
     contents: List[types.Content] = []
     call_id_to_name: Dict[str, str] = {}
+    degraded_ids: set = set()
 
     # 一轮工具调用可能包含多个并行调用（例如一次读 5 个文件）。
     # Gemini 要求这些结果【必须在同一个 turn 里，且数量与调用数一一对应】，
@@ -537,6 +545,15 @@ def build_contents(
         if role == "tool":
             tcid = str(msg.get("tool_call_id") or "")
             text = _as_text(msg.get("content"))
+            if tcid in degraded_ids:
+                # 调用已降级成文本，结果也必须降级，否则会出现"无对应调用的 functionResponse"
+                contents.append(
+                    types.Content(
+                        role="user",
+                        parts=[types.Part(text="[此前的工具结果] " + text)],
+                    )
+                )
+                continue
             if open_turn:
                 if tcid in dict(call_order):
                     call_results[tcid] = text
@@ -581,8 +598,19 @@ def build_contents(
                 if cached is not None:
                     # 用当初下发的原始 part，把 thought_signature 一并还原
                     call_parts.append(cached)
-                else:
+                elif require_sig:
+                    # 缺签名：降级成纯文本，避免模型跟着降级（见函数 docstring）
                     missed_sig += 1
+                    cid0 = str(tc.get("id") or "")
+                    if cid0:
+                        degraded_ids.add(cid0)
+                    call_parts.append(
+                        types.Part(
+                            text="[此前的工具调用] %s(%s)"
+                            % (fname, json.dumps(fargs, ensure_ascii=False)[:500])
+                        )
+                    )
+                else:
                     call_parts.append(
                         types.Part(
                             function_call=types.FunctionCall(name=fname, args=fargs)
@@ -592,7 +620,8 @@ def build_contents(
                     call_id_to_name[str(tc["id"])] = fname
             if missed_sig:
                 log.warning(
-                    "%d 个历史工具调用找不到签名缓存（代理重启前的旧会话），上游可能 400",
+                    "%d 个历史工具调用缺 thought_signature，已降级为文本"
+                    "（若重建裸 functionCall，模型会把调用写成文本，客户端就无法执行）",
                     missed_sig,
                 )
             if call_parts:
@@ -603,6 +632,8 @@ def build_contents(
                     if not cname:
                         continue
                     cid = str(tc.get("id") or "") or ("_noid_%d" % idx)
+                    if cid in degraded_ids:
+                        continue  # 已降级成文本，不能再期待 functionResponse
                     call_order.append((cid, cname))
                 call_results = {}
                 open_turn = bool(call_order)
@@ -717,6 +748,16 @@ def convert_tools(body: Dict[str, Any]) -> Tuple[Optional[List[types.Tool]], Any
         )
     )
     return [types.Tool(function_declarations=decls)], tool_config
+
+
+_TEXT_CALL_RE = re.compile(
+    r"(default_api:|call:\s*[A-Za-z_][\w.]*\s*\{|\b[A-Za-z_]+\(command[:=])"
+)
+
+
+def looks_like_text_toolcall(text: str) -> bool:
+    """模型是否把工具调用"念"成了文本（客户端只会展示、不会执行）。"""
+    return bool(text and _TEXT_CALL_RE.search(text[:2000]))
 
 
 def extract_tool_calls(resp: Any, backend: str = "vertex") -> List[Dict[str, Any]]:
@@ -1762,7 +1803,10 @@ async def chat_completions(req: ChatRequest, request: Request):
     if routed:
         return await _compat_completions(body, san, model, routed, stream)
 
-    system, contents = build_contents(body.get("messages") or [], backend)
+    # Gemini 3/4 系要求历史 functionCall 必须带 thought_signature；
+    # 缺了就降级成文本，否则模型会跟着降级、把工具调用写成文本
+    require_sig = model.lower().startswith(("gemini-3", "gemini-4"))
+    system, contents = build_contents(body.get("messages") or [], backend, require_sig)
 
     if not contents:
         return _err("messages 不能为空", 400, "invalid_request_error")
@@ -1836,6 +1880,12 @@ async def chat_completions(req: ChatRequest, request: Request):
             )
             text = san.restore(resp.text or "") or ""
             tool_calls = extract_tool_calls(resp, backend)
+            if not tool_calls and body.get("tools") and looks_like_text_toolcall(text):
+                log.warning(
+                    "[降级] %s 把工具调用写成了文本，客户端不会执行：%r",
+                    model,
+                    text[:120],
+                )
             for tc in tool_calls:
                 tc["function"]["arguments"] = san.restore(tc["function"]["arguments"])
 
@@ -1922,6 +1972,7 @@ async def chat_completions(req: ChatRequest, request: Request):
         restorer = StreamRestorer(san)
         pending_calls: List[Dict[str, Any]] = []
         native_parts: List[types.Part] = []
+        acc_text: List[str] = []  # 只用于判断"模型是否把工具调用写成了文本"
         try:
             # 首帧先给 role，兼容严格模式客户端
             yield sse(chunk({"role": "assistant", "content": ""}))
@@ -1968,6 +2019,7 @@ async def chat_completions(req: ChatRequest, request: Request):
                     text = ""
                 text = restorer.feed(text) if text else ""
                 if text:
+                    acc_text.append(text)
                     yield sse(chunk({"content": text}))
 
             tail = restorer.flush()
@@ -2023,8 +2075,20 @@ async def chat_completions(req: ChatRequest, request: Request):
                 )
                 text2 = san.restore(resp2.text or "") or ""
                 if text2:
+                    acc_text.append(text2)
                     yield sse(chunk({"content": text2}))
                 pending_calls = extract_tool_calls(resp2, backend)
+
+            if (
+                not pending_calls
+                and body.get("tools")
+                and looks_like_text_toolcall("".join(acc_text))
+            ):
+                log.warning(
+                    "[降级] %s 把工具调用写成了文本，客户端不会执行：%r",
+                    model,
+                    "".join(acc_text)[:120],
+                )
 
             if pending_calls:
                 deltas = []
