@@ -3,3 +3,6 @@
 # 开发/测试依赖
 pytest==9.1.1
 black==26.10.1
+
+# MCP 工具（tools/criteria_mcp.py 任务卡体检）
+mcp==1.29.0

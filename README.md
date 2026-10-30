@@ -303,6 +303,45 @@ GET /dashboard             自定义可视化面板（读取 web/dashboard.html�
 GET /healthz               存活探针 + 当前限额模式
 ```
 
+## 任务卡体检（MCP 工具）
+
+`tools/criteria_mcp.py` 是一个 stdio MCP 服务，**让会话自己调用**：写任务卡/需求文档时
+先体检一遍，把"会导致理解分歧的表述"挑出来，再发给模型执行。
+
+| 工具 | 成本 | 作用 |
+| --- | --- | --- |
+| `lint_prompt` | **0** | 规则检查：模糊词（适当/尽量/美观…）、缺禁止项、缺验收标准 |
+| `review_criteria` | 约 $0.002 | 走本地代理做歧义分析，每条给「解读A / 解读B / 隐患 / 建议改写」 |
+| `get_usage` | **0** | 今日花费与限额水位，跑重活前先看一眼 |
+
+安装与配置（ZCode 等客户端的 MCP 配置里加一段）：
+
+```powershell
+pip install mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "prompt-criteria": {
+      "command": "python",
+      "args": ["tools/criteria_mcp.py"],
+      "env": {
+        "PROXY_BASE": "http://127.0.0.1:4000",
+        "CRITERIA_MODEL": "deepseek/deepseek-flash"
+      }
+    }
+  }
+}
+```
+
+**设计约束**（有意为之）：
+
+- 全部经本地代理转发 → 自动计入账本、受限额保护，不另开一条计费链路
+- **只输出建议，不改用户原文** —— 代理不替用户改写意图，改不改由人决定
+- 默认 `deepseek-flash`（$0.002/次）；需要更强判断力时把 `CRITERIA_MODEL` 换成
+  `gemini-4-argon`（约 $0.1/次）
+
 ## 可视化面板
 
 `/dashboard` 托管 `web/dashboard.html`（单文件、无外部依赖、纯前端 `fetch('/stats?days=7')`）。
