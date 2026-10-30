@@ -190,6 +190,7 @@ curl http://127.0.0.1:4000/v1/models  # 会列出 ollama/qwen2.5:7b 等
 - **消息映射**：`system` → `system_instruction`；`assistant` → `model`；连续同角色合并；`function_response` 强制独立成 turn（否则上游 400）
 - **工具调用**：`tools` / `tool_choice` 双向映射，支持并行调用；`thought_signature` 按 `tool_call_id` 缓存并在回传时还原（3.8-flash / 4-argon 强制要求）
 - **服务端工具代执行**：模型调用 `Google:web_search` 时由网关内部用 `google_search` 执行并把结果回灌，客户端无感知（`SERVER_TOOL_BRIDGE=1`）
+- **图片输入**：`image_url` / `input_image` / `image` 三种块写法都认；`data:` base64、**本地路径**、`file://`、`http(s)` 均可。本地路径由代理读成字节再传（Vertex 不认本地路径），单图上限 20 MB
 - **出站脱敏**：密钥/令牌/私钥、连接串口令、邮箱、手机号、身份证、银行卡（Luhn 校验）→ 占位符，响应自动还原（`sanitize.py`）
 - **流式**：SSE 逐帧输出，占位符跨 chunk 也能还原
 - **健壮性**：429/5xx 指数退避重试；硬错误以 HTTP 502 + JSON 返回；模型名归一化与别名改写
@@ -420,7 +421,7 @@ python -m pytest        # 15 个用例，约 1 秒，零网络、不需要 Key
 
 ## 已知限制
 
-- 图片仅支持 `data:` base64，远程 URL 未验证
+- 图片支持 `data:` base64 / 本地路径 / `file://` / `http(s)`（远程只做透传，未实测）；**视频与 PDF 未支持**
 - `response_format` 只支持 `json_object`，不支持严格 `json_schema`
 - 代理重启后签名缓存清空，继续旧对话里带 `tool_call` 会 400 —— 新建对话即可
 - 单用户设计，没有并发/多租户隔离

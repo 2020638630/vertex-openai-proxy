@@ -421,28 +421,118 @@ class ChatRequest(BaseModel):
 # --------------------------------------------------------------------------
 # OpenAI <-> Gemini 消息转换
 # --------------------------------------------------------------------------
+MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 单张图上限，防客户端塞超大 base64
+_IMAGE_EXTS = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+
+
+def _read_local_image(path: str) -> Optional[types.Part]:
+    """本地图片路径 -> inline_data。
+
+    ZCode 这类客户端会把图片缓存到本地，只把路径塞进 image_url；
+    而 Vertex 只认 gs:// 与 https://，所以必须由我们读成字节再传。
+    """
+    p = path
+    if p.lower().startswith("file://"):
+        p = p[7:]
+        if len(p) > 2 and p[0] == "/" and p[2] == ":":  # /C:/xxx -> C:/xxx
+            p = p[1:]
+
+    ext = os.path.splitext(p)[1].lower()
+    if ext not in _IMAGE_EXTS:
+        log.warning("本地图片后缀不支持（%s），已跳过：%s", ext or "无后缀", p[:120])
+        return None
+    try:
+        size = os.path.getsize(p)
+    except OSError:
+        log.warning("本地图片读不到，已跳过：%s", p[:120])
+        return None
+    if size > MAX_IMAGE_BYTES:
+        log.warning(
+            "本地图片 %.1f MB 超过上限 %d MB，已跳过：%s",
+            size / 1048576,
+            MAX_IMAGE_BYTES // 1048576,
+            p[:120],
+        )
+        return None
+    try:
+        with open(p, "rb") as f:
+            data = f.read()
+    except OSError as exc:
+        log.warning("读取本地图片失败（%s）：%s", exc, p[:120])
+        return None
+    log.debug("本地图片 %s -> inline_data（%d 字节）", os.path.basename(p), len(data))
+    return types.Part(inline_data=types.Blob(mime_type=_IMAGE_EXTS[ext], data=data))
+
+
+def _image_part(src: Any, mime_hint: Optional[str] = None) -> Optional[types.Part]:
+    """图片块归一：data URL / 本地路径 / file:// / http(s) / {type:base64}。"""
+    if isinstance(src, dict):
+        if not mime_hint:
+            mime_hint = src.get("media_type") or src.get("mime_type")
+        if (src.get("type") or "").lower() == "base64" and src.get("data"):
+            try:
+                return types.Part(
+                    inline_data=types.Blob(
+                        mime_type=mime_hint or "image/png",
+                        data=base64.b64decode(src["data"]),
+                    )
+                )
+            except Exception:
+                return None
+        src = src.get("url") or ""
+    url = str(src or "").strip()
+    if not url:
+        return None
+
+    if url.startswith("data:") and ";base64," in url:
+        head, b64 = url.split(";base64,", 1)
+        try:
+            return types.Part(
+                inline_data=types.Blob(
+                    mime_type=head[5:] or mime_hint or "image/png",
+                    data=base64.b64decode(b64),
+                )
+            )
+        except Exception:
+            log.warning("base64 图片解码失败，已跳过")
+            return None
+
+    if url.startswith(("http://", "https://", "gs://")):
+        return types.Part(
+            file_data=types.FileData(file_uri=url, mime_type=mime_hint or "image/png")
+        )
+
+    # 其余当作本地路径（ZCode 的 image-cache 就是这种）
+    return _read_local_image(url)
+
+
 def _part_from_block(block: Dict[str, Any]) -> Optional[types.Part]:
-    """OpenAI content 数组元素 -> google-genai Part"""
+    """OpenAI 内容块 -> google-genai Part（兼容多种图片块写法）"""
     btype = (block.get("type") or "").lower()
 
     if btype in ("text", "input_text"):
         text = block.get("text") or ""
         return types.Part(text=text) if text else None
 
-    if btype == "image_url":
-        url = (block.get("image_url") or {}).get("url") or ""
-        if url.startswith("data:") and ";base64," in url:
-            head, b64 = url.split(";base64,", 1)
-            mime = head[5:] or "image/png"
-            return types.Part(
-                inline_data=types.Blob(mime_type=mime, data=base64.b64decode(b64))
-            )
-        if url:
-            # 远程 URL：Vertex 需要先取字节，这里交给 SDK 的 URI 能力
-            return types.Part(
-                file_data=types.FileData(file_uri=url, mime_type="image/png")
-            )
-        return None
+    # image_url（OpenAI 经典）/ input_image（新版）/ image（部分客户端）
+    if btype in ("image_url", "input_image", "image"):
+        src = (
+            block.get("image_url")
+            or block.get("image")
+            or block.get("source")
+            or block.get("data")
+        )
+        hint = block.get("media_type") or block.get("mime_type")
+        part = _image_part(src, hint)
+        if part is None:
+            log.warning("图片块无法解析，已跳过（type=%s）", btype)
+        return part
 
     return None
 
@@ -454,6 +544,7 @@ def _content_parts(content: Any) -> List[types.Part]:
         return [types.Part(text=content)] if content else []
     if isinstance(content, list):
         parts = []
+        images = 0
         for block in content:
             if isinstance(block, str):
                 if block:
@@ -462,6 +553,10 @@ def _content_parts(content: Any) -> List[types.Part]:
                 p = _part_from_block(block)
                 if p is not None:
                     parts.append(p)
+                    if getattr(p, "inline_data", None) or getattr(p, "file_data", None):
+                        images += 1
+        if images:
+            log.info("本条消息含 %d 个图片块，已转换为上游输入", images)
         return parts
     return [types.Part(text=str(content))]
 
