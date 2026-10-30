@@ -145,11 +145,20 @@ CRITERIA_PROMPT = """你是资深研发负责人，正在评审一份「任务�
 
 
 def _read_input(text_or_path: str) -> tuple[str, str]:
-    """参数既可以是正文，也可以是文件路径。"""
-    p = Path(text_or_path)
-    if len(text_or_path) < 400 and p.exists() and p.is_file():
-        return p.read_text(encoding="utf-8", errors="replace"), str(p)
-    return text_or_path, "(inline text)"
+    """参数既可以是正文，也可以是文件路径。
+
+    判路径要克制：只在"短、单行"时才去试文件系统。
+    否则长文本（或含换行的正文）在 Linux 上会直接抛 ENAMETOOLONG。
+    """
+    s = text_or_path or ""
+    if len(s) < 400 and "\n" not in s and "\r" not in s:
+        try:
+            p = Path(s)
+            if p.exists() and p.is_file():
+                return p.read_text(encoding="utf-8", errors="replace"), str(p)
+        except OSError:
+            pass  # 超长文件名 / 非法字符 / 无权限，一律当正文处理
+    return s, "(inline text)"
 
 
 def _chat(

@@ -61,3 +61,15 @@ def test_read_input_accepts_path_and_inline(tmp_path):
 
     text2, src2 = cm._read_input("这是一段足够长的内联正文" * 20)
     assert src2 == "(inline text)" and len(text2) > 100
+
+
+def test_long_inline_text_does_not_touch_filesystem():
+    """长文本不能拿去试 Path().exists()：Linux 上会抛 ENAMETOOLONG（CI 上踩过）。"""
+    long_text = "这是一段足够长的内联正文" * 40  # 远超 255 字节文件名上限
+    text, src = cm._read_input(long_text)
+    assert src == "(inline text)" and text == long_text
+
+
+def test_multiline_text_is_treated_as_inline():
+    text, src = cm._read_input("# 标题\n第一行\n第二行")
+    assert src == "(inline text)" and text.startswith("# 标题")
