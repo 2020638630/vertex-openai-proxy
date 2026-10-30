@@ -73,6 +73,28 @@ def test_signature_present_uses_original_part():
     assert calls and calls[0].thought_signature == b"SIG-OK"
 
 
+def test_missing_signature_logs_ids_and_dedupes(caplog):
+    """告警要能看出是哪个调用、什么工具；同一批只告警一次，避免每轮刷屏。"""
+    import logging
+
+    vp._SIG_CACHE.clear()
+    vp._last_missed_key = ""
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG):
+        vp.build_contents(_history(), backend="vertex", require_sig=True)
+        vp.build_contents(_history(), backend="vertex", require_sig=True)
+
+    warns = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "缺 thought_signature" in r.getMessage()
+    ]
+    assert len(warns) == 1, "同一批缺失只应告警一次"
+    msg = warns[0].getMessage()
+    assert "call_1" in msg and "Read" in msg, "告警里要带上调用 id 与工具名"
+
+
 def test_text_toolcall_detector():
     assert vp.looks_like_text_toolcall(
         "让我们看看。 call:default_api:Bash{command:pyinstaller --version}"

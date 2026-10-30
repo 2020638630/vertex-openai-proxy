@@ -483,6 +483,26 @@ def _as_text(content: Any) -> str:
     return str(content)
 
 
+_last_missed_key: str = ""
+
+
+def _log_missing_sig(missed: List[str]) -> None:
+    """记录"哪些历史调用丢了签名"，同一批只告警一次（否则每轮都刷同样的告警）。"""
+    global _last_missed_key
+    key = "|".join(sorted(missed))
+    detail = "、".join(missed[:8]) + ("…" if len(missed) > 8 else "")
+    if key == _last_missed_key:
+        log.debug("历史调用缺签名（同上一批，%d 个）：%s", len(missed), detail)
+        return
+    _last_missed_key = key
+    log.warning(
+        "%d 个历史工具调用缺 thought_signature，已降级为文本：%s"
+        "（若重建裸 functionCall，模型会把调用写成文本，客户端就无法执行）",
+        len(missed),
+        detail,
+    )
+
+
 def build_contents(
     messages: List[Dict[str, Any]],
     backend: str = "vertex",
@@ -583,6 +603,7 @@ def build_contents(
         if role == "assistant" and tool_calls:
             call_parts: List[types.Part] = list(parts)
             missed_sig = 0
+            missed_list: List[str] = []
             for tc in tool_calls:
                 fn = tc.get("function") or {}
                 fname = fn.get("name")
@@ -604,6 +625,7 @@ def build_contents(
                     cid0 = str(tc.get("id") or "")
                     if cid0:
                         degraded_ids.add(cid0)
+                    missed_list.append("%s(%s)" % ((cid0 or "无id")[:14], fname))
                     call_parts.append(
                         types.Part(
                             text="[此前的工具调用] %s(%s)"
@@ -619,11 +641,7 @@ def build_contents(
                 if tc.get("id"):
                     call_id_to_name[str(tc["id"])] = fname
             if missed_sig:
-                log.warning(
-                    "%d 个历史工具调用缺 thought_signature，已降级为文本"
-                    "（若重建裸 functionCall，模型会把调用写成文本，客户端就无法执行）",
-                    missed_sig,
-                )
+                _log_missing_sig(missed_list)
             if call_parts:
                 contents.append(types.Content(role="model", parts=call_parts))
                 call_order = []
