@@ -396,10 +396,13 @@ LOG_BACKUPS=5     保留份数
 
 ```powershell
 pip install -r requirements-dev.txt
-python -m pytest        # 15 个用例，约 1 秒，零网络、不需要 Key
+python -m pytest        # 100 个用例，约 6 秒，零网络、不需要 Key
 ```
 
-用例覆盖历史踩过的坑：并行工具合并、`function_response` 不合并、`thought_signature` 回传、服务端工具桥接、429 重试、硬错误 HTTP 化、脱敏往返、流式拆包。
+用例覆盖历史踩过的坑：并行工具合并、`function_response` 不合并、`thought_signature` 回传与
+**缺签名降级**、服务端工具桥接、429 重试、硬错误 HTTP 化、脱敏往返、流式拆包、
+额度软着陆与按花费限额、`max_tokens` 截断、图片块（base64 / 本地路径 / `input_image`）、
+`/v1/models` 能力元数据。
 
 ## 常见报错对照
 
@@ -415,6 +418,9 @@ python -m pytest        # 15 个用例，约 1 秒，零网络、不需要 Key
 | `maxOutputTokens ... supported range is from 1 to 65537` | 客户端把 `max_tokens` 按"上下文长度"填超了（如 128000） | 代理已按 `MODEL_META` 自动截断并记 WARNING；建议客户端也改到 65536 以内 |
 | `max_tokens and max_completion_tokens cannot both be set` | 客户端同时发了这两个字段 | 代理已去重（保留 `max_tokens`）；无需处理 |
 | `Function call is missing a thought_signature`（aistudio/*） | 走了 OpenAI 兼容层 | 已改为原生通道，**重启代理后生效** |
+| 模型说「看不到图片，只能看到路径」 | 图片块没转成上游输入（旧版本把本地路径当 `file_data` 直传，Vertex 不认） | 已支持本地路径读成 `inline_data`；看日志有没有 `含 N 个图片块` 判断是客户端没发还是代理没转 |
+| 模型把工具调用写成文本（`call:default_api:Bash{...}`） | 历史里的 `functionCall` 缺 `thought_signature`，模型降级 | 已降级为文本兜底；但历史仍"脏"，**新建对话**可彻底恢复 |
+| 某轮突然 `cached=0`、花费翻几倍 | 前缀被改写：换模型 / 客户端裁剪长历史 | 换模型后第一轮必然全价；长会话注意上下文裁剪 |
 
 > 网络类错误现在会**先预检再决定要不要重试**：代理端口不通、DNS 失败这类直接返回，
 > 不会让你干等 30 秒。链路抖动（超时/连接被重置）才走 5s→10s→20s 重试。
